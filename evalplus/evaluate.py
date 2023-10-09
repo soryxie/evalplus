@@ -32,6 +32,33 @@ from evalplus.gen.util import trusted_exec
 Result = Tuple[str, List[bool]]
 
 
+def perf_groundtruth(problems, times):
+    print("Perf GT ing...")
+    tbegin = time.time()
+    expected_output = {}
+    for task_id, problem in problems.items():
+        oracle = {}
+        _, oracle["base"] = trusted_exec(
+            problem["prompt"] + problem["canonical_solution"],
+            problem["base_input"],
+            problem["entry_point"],
+            record_time=True,
+            perf_time=times,
+        )
+
+        _, oracle["plus"] = trusted_exec(
+            problem["prompt"] + problem["canonical_solution"],
+            problem["plus_input"],
+            problem["entry_point"],
+            record_time=True,
+            perf_time=times,
+        )
+        expected_output[task_id] = oracle
+    print(f"Perf GT in {time.time() - tbegin:.2f}s")
+
+    return expected_output
+
+
 def get_groundtruth(problems, hashcode):
     cache_file = os.path.join(CACHE_DIR, f"{hashcode}.pkl")
     if os.path.exists(cache_file):
@@ -125,6 +152,13 @@ def evaluate_humaneval(flags):
         assert flags.samples.endswith(".jsonl")
         result_path = flags.samples.replace(".jsonl", "_eval_results.json")
 
+    if flags.gt_perf_time is not None:
+        problems = get_human_eval_plus(mini=flags.mini)
+        output = perf_groundtruth(problems, flags.gt_perf_time)
+        with open(flags.gt_perf_path + "perf_gt.json", "w") as f:
+            json.dump(output, f)
+        return
+
     if os.path.isfile(result_path) and not flags.i_just_wanna_run:
         print(f"Load from previous results from {result_path}")
         with open(result_path, "r") as f:
@@ -175,15 +209,18 @@ def evaluate_humaneval(flags):
                 completion_id[task_id] += 1
                 n_samples += 1
 
-            assert n_samples == len(remainings), "Missing problems in unfinished"
-            assert len(completion_id) == len(problems), "Missing problems in samples"
+            assert n_samples == len(
+                remainings), "Missing problems in unfinished"
+            assert len(completion_id) == len(
+                problems), "Missing problems in samples"
 
             def stucking_checker():
                 while remainings:
                     last_size = len(remainings)
                     time.sleep(10)
                     if last_size == len(remainings) and len(remainings) > 0:
-                        print(f"Stucking for 10 seconds... {len(remainings)} left")
+                        print(
+                            f"Stucking for 10 seconds... {len(remainings)} left")
                         for remaining in remainings:
                             print(remaining)
 
@@ -208,7 +245,8 @@ def evaluate_humaneval(flags):
     if os.path.isfile(result_path) and flags.i_just_wanna_run:
         decision = ""
         while decision.lower() not in ["y", "n"]:
-            print(f"{result_path} already exists. Press [Y/N] to overwrite or exit...")
+            print(
+                f"{result_path} already exists. Press [Y/N] to overwrite or exit...")
             decision = input()
 
         if decision.lower() == "y":
@@ -272,12 +310,15 @@ def main():
     parser.add_argument("--gt-time-limit-factor", default=4.0, type=float)
     parser.add_argument("--mini", action="store_true")
     parser.add_argument("--perf", action='store_true')
+    parser.add_argument("--gt_perf_time", default=None, type=int)
+    parser.add_argument("--gt_perf_path", default=None, type=str)
     args = parser.parse_args()
 
     if args.dataset == "humaneval":
         evaluate_humaneval(args)
     else:
-        raise NotImplementedError("Unsupported dataset: {}".format(args.dataset))
+        raise NotImplementedError(
+            "Unsupported dataset: {}".format(args.dataset))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,10 @@
+version: '3'
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/evalplus
+      - ../model:/model
+    command: sh -c "cd /evalplus && pip install . && cd /model && sh model_perf.sh"
