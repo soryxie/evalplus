@@ -7,10 +7,8 @@ RUN apt-get update && apt-get install -y git
 # upgrade to latest pip
 RUN pip install --upgrade pip
 
-COPY . /evalplus
+COPY requirements-tools.txt requirements-llm.txt requirements.txt /requirements/
 
-RUN cd /evalplus && pip install .
-
-WORKDIR /app
-
-ENTRYPOINT ["python3", "-m", "evalplus.evaluate"]
+RUN cd /requirements && pip install -r requirements-tools.txt \
+    && pip install -r requirements-llm.txt \
+    && pip install -r requirements.txt

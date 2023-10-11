@@ -1,0 +1,9 @@
+version: '3'
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/evalplus
+    command: sh -c "cd /evalplus && pip install . && python3 tools/_experimental/eval_problems.py --times 10 --res_file tools/_experimental/perf_res.txt"
