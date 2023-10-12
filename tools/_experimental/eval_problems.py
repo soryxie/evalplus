@@ -28,11 +28,12 @@ def perf_exec(code, inputs, entry_point, perf_time):
     for _ in range(perf_time):
         for index, inp in enumerate(inputs):
             start = time.time_ns()
-            fn(*inp)
+            output = fn(*inp)
             latency = time.time_ns() - start
 
             if len(reocords) != len(inputs):
-                reocords.append({"input": inp, "rtime": [latency]})
+                reocords.append(
+                    {"input": inp, "output": output, "rtime": [latency]})
             else:
                 reocords[index]["rtime"].append(latency)
 
@@ -77,13 +78,13 @@ def perf_groundtruth(problems, hashcode, times):
 # select the most diffcult input within the CV threshold
 def select_input(task_id, task_res, base_or_plus):
     OneInputResult = namedtuple(
-        "OneInputResult", ["inp", "avg", "CV"])
+        "OneInputResult", ["inp", "avg", "CV", "outp"])
     testcases = []
     for inp_task in task_res[base_or_plus]:
-        inp = inp_task["input"]
         times = inp_task["rtime"]
         testcases.append(OneInputResult(
-            inp=inp,
+            inp=inp_task["input"],
+            outp=inp_task["output"],
             avg=sum(times) / len(times),
             CV=np.std(times) / np.mean(times)
         ))
@@ -102,6 +103,7 @@ def select_input(task_id, task_res, base_or_plus):
     if len(filtered_testcases):
         max_testcase = max(filtered_testcases, key=lambda x: x.avg)
         record["selected_input"] = max_testcase.inp
+        record["selected_output"] = max_testcase.outp
         record["selected_CV"] = max_testcase.CV
         record["selected_rtime"] = max_testcase.avg/1000000
 
