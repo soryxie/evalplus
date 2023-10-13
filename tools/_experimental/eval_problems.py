@@ -102,10 +102,10 @@ def select_input(task_id, task_res, base_or_plus):
 
     if len(filtered_testcases):
         max_testcase = max(filtered_testcases, key=lambda x: x.avg)
-        record["selected_input"] = max_testcase.inp
-        record["selected_output"] = max_testcase.outp
+        record["selected_input"] = [max_testcase.inp]
+        record["selected_output"] = [max_testcase.outp]
         record["selected_CV"] = max_testcase.CV
-        record["selected_rtime"] = max_testcase.avg/1000000
+        record["selected_rtime"] = [max_testcase.avg]
 
     return record
 
@@ -120,7 +120,7 @@ def format_print(perf_res, output_file):
                 if record["satis_input_num"]:
                     print("{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
                         record["task_id"], base_or_plus, record["problem_CV"], record["satis_input_num"],
-                        record["selected_input"], record["selected_CV"], record["selected_rtime"]))
+                        record["selected_input"][0], record["selected_CV"], record["selected_rtime"][0]/1e6))
                 else:
                     print("{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
                         record["task_id"], base_or_plus, record["problem_CV"], record["satis_input_num"], "", "", ""))

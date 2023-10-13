@@ -107,6 +107,7 @@ def unsafe_execute(
     stat: Value,
     details: Array,
     progress: Value,
+    time_cost: Array,
 ):
     with create_tempdir():
         # These system calls are needed when cleaning up tempdir.
@@ -128,7 +129,9 @@ def unsafe_execute(
                 for i, inp in enumerate(inputs):
                     try:
                         with time_limit(time_limits[i]):
+                            start = time.time_ns()
                             out = fn(*inp)
+                            time_cost[i] = (time.time_ns() - start)
 
                         exp = expected[i]
                         exact_match = out == exp
@@ -147,6 +150,7 @@ def unsafe_execute(
                             raise
 
                         details[i] = False
+                        time_cost[i] = 0
                         progress.value += 1
                         continue
 
@@ -171,7 +175,8 @@ def untrusted_check(
     fast_check: bool = False,
     min_time_limit: float = 0.1,
     gt_time_limit_factor: float = 2.0,
-) -> Tuple[str, np.ndarray]:
+) -> Union[Tuple[str, np.ndarray] , Tuple[str, np.ndarray, int]]:
+    ref_time[0] /= 1e9
     time_limits = [max(min_time_limit, gt_time_limit_factor * t) for t in ref_time]
     timeout = sum(time_limits) + 1
     if not fast_check:
@@ -181,6 +186,7 @@ def untrusted_check(
     progress = Value("i", 0)
     stat = Value("i", _UNKNOWN)
     details = Array("b", [False for _ in range(len(inputs))])
+    time_cost = Array("i", [0 for _ in range(len(inputs))])
 
     p = multiprocessing.Process(
         target=unsafe_execute,
@@ -196,6 +202,7 @@ def untrusted_check(
             stat,
             details,
             progress,
+            time_cost,
         ),
     )
     p.start()
@@ -209,6 +216,7 @@ def untrusted_check(
 
     stat = _mapping[stat.value]
     details = details[: progress.value]
+    time_cost = time_cost[: progress.value]
 
     if not stat:
         stat = TIMEOUT
@@ -217,7 +225,7 @@ def untrusted_check(
         if len(details) != len(inputs) or not all(details):
             stat = FAILED
 
-    return stat, details
+    return stat, details, time_cost
 
 
 def evaluate_files(

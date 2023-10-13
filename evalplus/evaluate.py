@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
+from tools._experimental.eval_problems import perf_groundtruth, select_input
 
 import numpy as np
 from tqdm import tqdm
@@ -82,30 +83,36 @@ def check_correctness(
         "task_id": problem["task_id"],
         "_identifier": identifier,
     }
-    ret["base"] = untrusted_check(
-        solution,
-        problem["base_input"],
-        problem["entry_point"],
-        expected=expected_output["base"],
-        atol=problem["atol"],
-        ref_time=expected_output["base_time"],
-        fast_check=fast_check,
-        min_time_limit=min_time_limit,
-        gt_time_limit_factor=gt_time_limit_factor,
-    )
-
-    if not base_only:
-        ret["plus"] = untrusted_check(
+    if expected_output["base"]["satis_input_num"] > 0:
+        ret["base"] = untrusted_check(
             solution,
-            problem["plus_input"],
+            expected_output["base"]["selected_input"],
             problem["entry_point"],
-            expected=expected_output["plus"],
+            expected=expected_output["base"]["selected_output"],
             atol=problem["atol"],
-            ref_time=expected_output["plus_time"],
+            ref_time=expected_output["base"]["selected_rtime"],
             fast_check=fast_check,
             min_time_limit=min_time_limit,
             gt_time_limit_factor=gt_time_limit_factor,
         )
+    else:
+        ret["base"] = ('failed', [])
+
+    if not base_only:
+        if expected_output["plus"]["satis_input_num"] > 0:
+            ret["plus"] = untrusted_check(
+                solution,
+                expected_output["plus"]["selected_input"],
+                problem["entry_point"],
+                expected=expected_output["plus"]["selected_output"],
+                atol=problem["atol"],
+                ref_time=expected_output["plus"]["selected_rtime"],
+                fast_check=fast_check,
+                min_time_limit=min_time_limit,
+                gt_time_limit_factor=gt_time_limit_factor,
+            )
+        else:
+            ret["plus"] = ('failed', [])
 
     return ret
 
@@ -132,7 +139,13 @@ def evaluate_humaneval(flags):
         problems = get_human_eval_plus(mini=flags.mini)
 
         dataset_hash = get_human_eval_plus_hash()
-        expected_output = get_groundtruth(problems, dataset_hash)
+        expected_perf =   perf_groundtruth(problems, dataset_hash, flags.gt_perf_time)
+
+        expected_output = {}
+        for task_id, task_res in expected_perf.items():
+            expected_output[task_id] = {}
+            expected_output[task_id]["base"] = select_input(task_id, task_res, "base")
+            expected_output[task_id]["plus"] = select_input(task_id, task_res, "plus")
 
         results = {
             "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -140,66 +153,72 @@ def evaluate_humaneval(flags):
             "eval": {},
         }
 
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            futures = []
-            completion_id = Counter()
-            n_samples = 0
-            eval_results = defaultdict(list)
-            remainings = set()
+        for _ in range(flags.sample_perf_time):
+            with ProcessPoolExecutor(max_workers=n_workers) as executor:
+                futures = []
+                completion_id = Counter()
+                n_samples = 0
+                eval_results = defaultdict(list)
+                remainings = set()
 
-            print("Reading samples...")
-            for sample in tqdm(load_solutions(flags.samples)):
-                task_id = sample["task_id"]
-                solution = (
-                    sample["solution"]
-                    if "solution" in sample
-                    else problems[task_id]["prompt"] + sample["completion"]
-                )
-                remainings.add(sample["_identifier"])
-                args = (
-                    completion_id[task_id],
-                    problems[task_id],
-                    solution,
-                    expected_output[task_id],
-                    flags.base_only,
-                    not flags.test_details,  # fast_check
-                    sample["_identifier"],
-                    flags.min_time_limit,
-                    flags.gt_time_limit_factor,
-                )
-                futures.append(executor.submit(check_correctness, *args))
-                completion_id[task_id] += 1
-                n_samples += 1
+                print("Reading samples...")
+                for sample in tqdm(load_solutions(flags.samples)):
+                    task_id = sample["task_id"]
+                    solution = (
+                        sample["solution"]
+                        if "solution" in sample
+                        else problems[task_id]["prompt"] + sample["completion"]
+                    )
+                    remainings.add(sample["_identifier"])
+                    args = (
+                        completion_id[task_id],
+                        problems[task_id],
+                        solution,
+                        expected_output[task_id],
+                        flags.base_only,
+                        not flags.test_details,  # fast_check
+                        sample["_identifier"],
+                        flags.min_time_limit,
+                        flags.gt_time_limit_factor,
+                    )
+                    futures.append(executor.submit(check_correctness, *args))
+                    completion_id[task_id] += 1
+                    n_samples += 1
 
-            assert n_samples == len(remainings), "Missing problems in unfinished"
-            assert len(completion_id) == len(problems), "Missing problems in samples"
+                assert n_samples == len(remainings), "Missing problems in unfinished"
+                assert len(completion_id) == len(problems), "Missing problems in samples"
 
-            def stucking_checker():
-                while remainings:
-                    last_size = len(remainings)
-                    time.sleep(10)
-                    if last_size == len(remainings) and len(remainings) > 0:
-                        print(f"Stucking for 10 seconds... {len(remainings)} left")
-                        for remaining in remainings:
-                            print(remaining)
+                def stucking_checker():
+                    while remainings:
+                        last_size = len(remainings)
+                        time.sleep(10)
+                        if last_size == len(remainings) and len(remainings) > 0:
+                            print(f"Stucking for 10 seconds... {len(remainings)} left")
+                            for remaining in remainings:
+                                print(remaining)
 
-            threading.Thread(target=stucking_checker).start()
+                threading.Thread(target=stucking_checker).start()
 
-            for future in tqdm(as_completed(futures), total=n_samples):
-                result = future.result()
-                remainings.remove(result["_identifier"])
-                eval_results[result["task_id"]].append(result)
+                for future in tqdm(as_completed(futures), total=n_samples):
+                    result = future.result()
+                    remainings.remove(result["_identifier"])
+                    eval_results[result["task_id"]].append(result)
 
-        # sort the results for each problem by completion_id
-        for task_id, task_results in eval_results.items():
-            task_results.sort(key=lambda x: x["completion_id"])
-            results["eval"][task_id] = {
-                "nfiles": len(task_results),
-                "base": [x["base"] for x in task_results],
-                "plus": [x["plus"] for x in task_results]
-                if not flags.base_only
-                else [],
-            }
+            # sort the results for each problem by completion_id
+            for task_id, task_results in eval_results.items():
+                task_results.sort(key=lambda x: x["completion_id"])
+                if task_id in results["eval"]:
+                    results["eval"][task_id]["base"].extend([x["base"] for x in task_results])
+                    if not flags.base_only:
+                        results["eval"][task_id]["plus"].extend([x["plus"] for x in task_results])
+                else:
+                    results["eval"][task_id] = {
+                        "nfiles": len(task_results),
+                        "base": [x["base"] for x in task_results],
+                        "plus": [x["plus"] for x in task_results]
+                        if not flags.base_only
+                        else [],
+                    }
 
     if os.path.isfile(result_path) and flags.i_just_wanna_run:
         decision = ""
@@ -266,6 +285,8 @@ def main():
     parser.add_argument("--test-details", action="store_true")
     parser.add_argument("--min-time-limit", default=0.2, type=float)
     parser.add_argument("--gt-time-limit-factor", default=4.0, type=float)
+    parser.add_argument("--gt-perf-time", default=2, type=int)
+    parser.add_argument("--sample-perf-time", default=2, type=int)
     parser.add_argument("--mini", action="store_true")
     args = parser.parse_args()
 
