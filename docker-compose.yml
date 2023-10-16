@@ -7,6 +7,5 @@ services:
     volumes:
       - .:/evalplus
       - ../model:/model
-#    command: sh -c "cd /evalplus && pip install . && python3 -m evalplus.evaluate --dataset humaneval --samples ../model/gpt-4_temp_0.0"
-    command: sh -c "cd /evalplus && pip install . && echo y | python3 -m evalplus.evaluate --i-just-wanna-run --gt-perf-time 2 --sample-perf-time 2 --dataset humaneval --samples ../model/gpt-4_temp_0.0"
-#    command: sh -c "cd /evalplus && pip install . && python3 tools/_experimental/eval_problems.py --times 2 --res_file tools/_experimental/perf_res.txt"
+    command: sh -c "cd /evalplus && pip install . && sh model_perf.sh"
+    
