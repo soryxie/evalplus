@@ -83,7 +83,16 @@ def load_solutions(sample_path: PathLike) -> Iterable[Dict]:
             yield sample
     else:
         # if it is a folder
+
+        correct_files = os.path.join(sample_path, "archive.json")
+        archive = None
+        if os.path.exists(correct_files):
+            print("Load correct file records form", correct_files)
+            archive = json.load(open(correct_files, "r"))
+
+        wrong_num, total_num = 0, 0
         for task_id in os.listdir(sample_path):
+            send_task_id = task_id.replace("HumanEval_", "HumanEval/")
             task_path = os.path.join(sample_path, task_id)
             if os.path.isdir(task_path):
                 for solution_id in os.listdir(task_path):
@@ -91,11 +100,19 @@ def load_solutions(sample_path: PathLike) -> Iterable[Dict]:
                     if os.path.isfile(solution_path) and solution_path.endswith(".py"):
                         with open(solution_path, "r") as f:
                             completion = f.read()
+                        
+                        total_num += 1
+                        impl_wrong = False
+                        if archive is not None and archive[send_task_id][solution_id[:-3]] == False:
+                            impl_wrong = True
+                            wrong_num += 1
                         yield {
                             "_identifier": solution_path,
-                            "task_id": task_id.replace("HumanEval_", "HumanEval/"),
+                            "task_id": send_task_id,
                             "solution": completion,
+                            "impl_wrong": impl_wrong,
                         }
+        print(f"Correct rate: {wrong_num}/{total_num} files")
 
 
 HUMANEVAL_OVERRIDE_PATH = os.environ.get("HUMANEVAL_OVERRIDE_PATH", None)

@@ -77,14 +77,14 @@ def check_correctness(
     identifier=None,
     min_time_limit: float = 0.1,
     gt_time_limit_factor: float = 2.0,
-    nothing_to_do=False,
+    impl_wrong=False,
 ) -> Dict[str, Union[int, Optional[Result]]]:
     ret = {
         "completion_id": completion_id,
         "task_id": problem["task_id"],
         "_identifier": identifier,
     }
-    if nothing_to_do == False and expected_output["base"]["satis_input_num"] > 0:
+    if impl_wrong == False and expected_output["base"]["satis_input_num"] > 0:
         ret["base"] = untrusted_check(
             solution,
             expected_output["base"]["selected_input"],
@@ -100,7 +100,7 @@ def check_correctness(
         ret["base"] = ('failed', [])
 
     if not base_only:
-        if nothing_to_do == False and expected_output["plus"]["satis_input_num"] > 0:
+        if impl_wrong == False and expected_output["plus"]["satis_input_num"] > 0:
             ret["plus"] = untrusted_check(
                 solution,
                 expected_output["plus"]["selected_input"],
@@ -154,11 +154,10 @@ def evaluate_humaneval(flags):
             "eval": {task_id: {} for task_id in expected_perf.keys()},
         }
 
-        correctness = {}
         problems_num = len(problems)
 
         for rerun_time in range(flags.sample_perf_time):
-            with ProcessPoolExecutor(max_workers=6) as executor:
+            with ProcessPoolExecutor(max_workers=1) as executor:
                 futures = []
                 completion_id = Counter()
                 n_samples = 0
@@ -173,10 +172,6 @@ def evaluate_humaneval(flags):
                         if "solution" in sample
                         else problems[task_id]["prompt"] + sample["completion"]
                     )
-
-                    correct = correctness.get(sample["_identifier"], True)
-                    nothing_to_do = False if correct else True
-                        
                     remainings.add(sample["_identifier"])
                     args = (
                         completion_id[task_id],
@@ -188,7 +183,7 @@ def evaluate_humaneval(flags):
                         sample["_identifier"],
                         flags.min_time_limit,
                         flags.gt_time_limit_factor,
-                        nothing_to_do,
+                        sample["impl_wrong"],
                     )
                     futures.append(executor.submit(check_correctness, *args))
                     completion_id[task_id] += 1
@@ -215,28 +210,11 @@ def evaluate_humaneval(flags):
                 for future in tqdm(as_completed(futures), total=n_samples):
                     result = future.result()
                     remainings.remove(result["_identifier"])
-                    eval_results[result["task_id"]].append(result)
-
-                    if not flags.base_only:
-                        if correctness.get(sample["_identifier"], True) == True and result["plus"][0] == "success":
-                            correctness[result["_identifier"]] = True
-                        else:
-                            correctness[result["_identifier"]] = False
-
-            # print correct rate
-            problems_num = sum(correctness.values(), 0)
-            print("correct rate: {}/{}".format(problems_num, len(correctness.values())))
-            
-
+                    eval_results[result["task_id"]].append(result)            
 
             # sort the results for each problem by completion_id
             for task_id, task_results in eval_results.items():
                 task_results.sort(key=lambda x: x["completion_id"])
-                '''if task_id in results["eval"]:
-                    results["eval"][task_id]["base"].extend([x["base"] for x in task_results])
-                    if not flags.base_only:
-                        results["eval"][task_id]["plus"].extend([x["plus"] for x in task_results])
-                else:'''
                 results["eval"][task_id][rerun_time] = {
                     "nfiles": len(task_results),
                     "base": [x["base"] for x in task_results],
