@@ -104,9 +104,11 @@ def unsafe_execute(
     time_limits,
     atol,
     fast_check,
+    perf,
     stat: Value,
     details: Array,
     progress: Value,
+    time_cost: Value,
 ):
     with create_tempdir():
         # These system calls are needed when cleaning up tempdir.
@@ -125,6 +127,11 @@ def unsafe_execute(
             with swallow_io():
                 exec(code, exec_globals)
                 fn = exec_globals[entry_point]
+                if perf:
+                    st = time.time()
+                    for inp in inputs:
+                        fn(*inp)
+                    time_cost.value = time.time() - st
                 for i, inp in enumerate(inputs):
                     try:
                         with time_limit(time_limits[i]):
@@ -171,7 +178,8 @@ def untrusted_check(
     fast_check: bool = False,
     min_time_limit: float = 0.1,
     gt_time_limit_factor: float = 2.0,
-) -> Tuple[str, np.ndarray]:
+    perf = False,
+) -> Union[Tuple[str, np.ndarray] , Tuple[str, float]]:
     time_limits = [max(min_time_limit, gt_time_limit_factor * t) for t in ref_time]
     timeout = sum(time_limits) + 1
     if not fast_check:
@@ -181,6 +189,7 @@ def untrusted_check(
     progress = Value("i", 0)
     stat = Value("i", _UNKNOWN)
     details = Array("b", [False for _ in range(len(inputs))])
+    time_cost = Value("d", 0.0)
 
     p = multiprocessing.Process(
         target=unsafe_execute,
@@ -192,10 +201,12 @@ def untrusted_check(
             time_limits,
             atol,
             fast_check,
+            perf,
             # return values
             stat,
             details,
             progress,
+            time_cost,
         ),
     )
     p.start()
@@ -216,6 +227,9 @@ def untrusted_check(
     if stat == SUCCESS:
         if len(details) != len(inputs) or not all(details):
             stat = FAILED
+        
+    if perf:
+        return stat, time_cost.value
 
     return stat, details
 

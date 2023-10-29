@@ -10,6 +10,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
 from warnings import warn
+from evalplus._experimental.perf_groundtruth import get_selected_groundtruth
 
 import numpy as np
 from tqdm import tqdm
@@ -77,12 +78,29 @@ def check_correctness(
     identifier=None,
     min_time_limit: float = 0.1,
     gt_time_limit_factor: float = 2.0,
+    perf = False,
+    impl_wrong = False,
 ) -> Dict[str, Union[int, Optional[Result]]]:
     ret = {
         "completion_id": completion_id,
         "task_id": problem["task_id"],
         "_identifier": identifier,
     }
+    if perf:
+        ret["perf_result"] = untrusted_check(
+            solution,
+            expected_output["selected_input"],
+            problem["entry_point"],
+            expected=expected_output["selected_output"],
+            atol=problem["atol"],
+            ref_time=expected_output["selected_rtime"],
+            fast_check=fast_check,
+            min_time_limit=min_time_limit,
+            gt_time_limit_factor=gt_time_limit_factor,
+            perf=perf,
+        ) if not impl_wrong else ('failed', [])
+        return ret
+            
     ret["base"] = untrusted_check(
         solution,
         problem["base_input"],
@@ -135,73 +153,148 @@ def evaluate_humaneval(flags):
         dataset_hash = get_human_eval_plus_hash()
         expected_output = get_groundtruth(problems, dataset_hash)
 
+        selected_groundtruth = get_selected_groundtruth(problems, dataset_hash, flags.base_only)
+        correctness_archive_path = os.path.join(flags.samples, "correctness_archive.json")
+
         results = {
             "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "hash": dataset_hash,
-            "eval": {},
+            "eval": {task_id: {} for task_id in expected_output.keys()},
         }
 
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            futures = []
-            completion_id = Counter()
-            n_samples = 0
-            eval_results = defaultdict(list)
-            remainings = set()
+        for perf_round in range(flags.sample_perf_times + 1):
+            if perf_round == 0:
+                if os.path.isfile(correctness_archive_path):
+                    print(f"already checked correctness, skip round 0")
+                    continue
+            else:
+                print(f"--------Re-sampling {perf_round} times...--------")
+                n_workers = 1 # profiling need to be single-threaded
+            
+            with ProcessPoolExecutor(max_workers=n_workers) as executor:
+                futures = []
+                completion_id = Counter()
+                n_samples = 0
+                eval_results = defaultdict(list)
+                remainings = set()
 
-            print("Reading samples...")
-            for sample in tqdm(load_solutions(flags.samples)):
-                task_id = sample["task_id"]
-                solution = (
-                    sample["solution"]
-                    if "solution" in sample
-                    else problems[task_id]["prompt"] + sample["completion"]
-                )
-                remainings.add(sample["_identifier"])
-                args = (
-                    completion_id[task_id],
-                    problems[task_id],
-                    solution,
-                    expected_output[task_id],
-                    flags.base_only,
-                    not flags.test_details,  # fast_check
-                    sample["_identifier"],
-                    flags.min_time_limit,
-                    flags.gt_time_limit_factor,
-                )
-                futures.append(executor.submit(check_correctness, *args))
-                completion_id[task_id] += 1
-                n_samples += 1
+                print("Reading samples...")
+                for sample in tqdm(load_solutions(flags.samples)):
+                    task_id = sample["task_id"]
+                    solution = (
+                        sample["solution"]
+                        if "solution" in sample
+                        else problems[task_id]["prompt"] + sample["completion"]
+                    )
+                    remainings.add(sample["_identifier"])
+                    completion_id[task_id] = sample["solution_id"]
+                    args = (
+                        completion_id[task_id],
+                        problems[task_id],
+                        solution,
+                        expected_output[task_id],
+                        flags.base_only,
+                        not flags.test_details,  # fast_check
+                        sample["_identifier"],
+                        flags.min_time_limit,
+                        flags.gt_time_limit_factor,
+                    ) if perf_round == 0 else \
+                    (   
+                        completion_id[task_id],
+                        problems[task_id],
+                        solution,
+                        selected_groundtruth[task_id],  # use selected groundtruth
+                        flags.base_only,
+                        not flags.test_details,
+                        sample["_identifier"],
+                        flags.min_time_limit,
+                        flags.gt_time_limit_factor,
+                        True,                           # perf
+                        sample["impl_wrong"],           # no need to perf, if impl_wrong is True
+                    )
+                    futures.append(executor.submit(check_correctness, *args))
+                    n_samples += 1
 
-            assert n_samples == len(remainings), "Missing problems in unfinished"
-            assert len(completion_id) == len(problems), "Missing problems in samples"
+                def stucking_checker():
+                    while remainings:
+                        last_size = len(remainings)
+                        time.sleep(10)
+                        if last_size == len(remainings) and len(remainings) > 0:
+                            print(f"Stucking for 10 seconds... {len(remainings)} left")
+                            for remaining in remainings:
+                                print(remaining)
 
-            def stucking_checker():
-                while remainings:
-                    last_size = len(remainings)
-                    time.sleep(20)
-                    if last_size != len(remainings) or len(remainings) == 0:
-                        continue
-                    # Potential stucking
-                    warn("No samples had finished testing in the last 20s")
-                    warn(f"{len(remainings)} samples to be tested: {remainings}")
+                threading.Thread(target=stucking_checker).start()
 
-            threading.Thread(target=stucking_checker).start()
+                for future in tqdm(as_completed(futures), total=n_samples):
+                    result = future.result()
+                    remainings.remove(result["_identifier"])
+                    eval_results[result["task_id"]].append(result)
 
-            for future in tqdm(as_completed(futures), total=n_samples):
-                result = future.result()
-                remainings.remove(result["_identifier"])
-                eval_results[result["task_id"]].append(result)
+            if perf_round > 0:
+                # sort the results for each problem by completion_id
+                for task_id, task_results in eval_results.items():
+                    task_results.sort(key=lambda x: x["completion_id"])
+                    results["eval"][task_id][perf_round-1] = {
+                        "nfiles": len(task_results),
+                        "perf_result": [x["perf_result"] for x in task_results],
+                    }
+            else:
+                correctness_archive = {}
+                for task_id, task_results in eval_results.items():
+                    task_results.sort(key=lambda x: x["completion_id"])
+                    correctness_archive[task_id] = {
+                        x["completion_id"]: True if x["plus"][0] == SUCCESS else False\
+                        for x in task_results
+                    }
+                with open(correctness_archive_path, "w") as f:
+                    json.dump(correctness_archive, f)
+                
+                correctness_results = {}
+                correctness_results["eval"] = {}
+                correctness_results["eval"][task_id] = {
+                    "nfiles": len(task_results),
+                    "base": [x["base"] for x in task_results],
+                    "plus": [x["plus"] for x in task_results]
+                    if not flags.base_only
+                    else [],
+                }
 
-        # sort the results for each problem by completion_id
-        for task_id, task_results in eval_results.items():
-            task_results.sort(key=lambda x: x["completion_id"])
-            results["eval"][task_id] = {
-                "nfiles": len(task_results),
-                "base": [x["base"] for x in task_results],
-                "plus": [x["plus"] for x in task_results]
-                if not flags.base_only
-                else [],
-            }
+                # Calculate pass@k.
+                total = np.array([r["nfiles"] for r in correctness_results["eval"].values()])
+                base_correct = []
+                new_correct = []
+
+                for res in correctness_results["eval"].values():
+                    bc = sum([r[0] == SUCCESS for r in res["base"]])
+                    base_correct.append(bc)
+                    if res["plus"]:
+                        new_correct.append(
+                            sum(
+                                [
+                                    res["plus"][i][0] == res["base"][i][0] == SUCCESS
+                                    for i in range(len(res["plus"]))
+                                ]
+                            )
+                        )
+                base_correct = np.array(base_correct)
+
+                pass_at_k = {
+                    f"pass@{k}": estimate_pass_at_k(total, base_correct, k).mean()
+                    for k in [1, 10, 100]
+                    if total.min() >= k
+                }
+                print("Base")
+                print(pass_at_k)
+
+                if new_correct:
+                    print("Base + Extra")
+                    pass_at_k = {
+                        f"pass@{k}": estimate_pass_at_k(total, np.array(new_correct), k).mean()
+                        for k in [1, 10, 100]
+                        if (total >= k).all()
+                    }
+                    print(pass_at_k)
 
     if os.path.isfile(result_path) and flags.i_just_wanna_run:
         decision = ""
@@ -221,42 +314,6 @@ def evaluate_humaneval(flags):
         with open(result_path, "w") as f:
             json.dump(results, f)
 
-    # Calculate pass@k.
-    total = np.array([r["nfiles"] for r in results["eval"].values()])
-    base_correct = []
-    new_correct = []
-
-    for res in results["eval"].values():
-        bc = sum([r[0] == SUCCESS for r in res["base"]])
-        base_correct.append(bc)
-        if res["plus"]:
-            new_correct.append(
-                sum(
-                    [
-                        res["plus"][i][0] == res["base"][i][0] == SUCCESS
-                        for i in range(len(res["plus"]))
-                    ]
-                )
-            )
-    base_correct = np.array(base_correct)
-
-    pass_at_k = {
-        f"pass@{k}": estimate_pass_at_k(total, base_correct, k).mean()
-        for k in [1, 10, 100]
-        if total.min() >= k
-    }
-    print("Base")
-    print(pass_at_k)
-
-    if new_correct:
-        print("Base + Extra")
-        pass_at_k = {
-            f"pass@{k}": estimate_pass_at_k(total, np.array(new_correct), k).mean()
-            for k in [1, 10, 100]
-            if (total >= k).all()
-        }
-        print(pass_at_k)
-
 
 def main():
     parser = argparse.ArgumentParser()
@@ -269,6 +326,7 @@ def main():
     parser.add_argument("--min-time-limit", default=0.2, type=float)
     parser.add_argument("--gt-time-limit-factor", default=4.0, type=float)
     parser.add_argument("--mini", action="store_true")
+    parser.add_argument("--sample-perf-times", default=2, type=int)
     args = parser.parse_args()
 
     if args.dataset == "humaneval":

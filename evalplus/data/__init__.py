@@ -83,19 +83,40 @@ def load_solutions(sample_path: PathLike) -> Iterable[Dict]:
             yield sample
     else:
         # if it is a folder
+        correct_files = os.path.join(sample_path, "correctness_archive.json")
+        correctness = None
+        if os.path.exists(correct_files):
+            print("Load correctness records form", correct_files)
+            correctness = json.load(open(correct_files, "r"))
+
+        correct_num, total_num = 0, 0
         for task_id in os.listdir(sample_path):
+            send_task_id = task_id.replace("HumanEval_", "HumanEval/")
             task_path = os.path.join(sample_path, task_id)
             if os.path.isdir(task_path):
-                for solution_id in os.listdir(task_path):
-                    solution_path = os.path.join(task_path, solution_id)
+                for solution_file_name in os.listdir(task_path):
+                    solution_path = os.path.join(task_path, solution_file_name)
                     if os.path.isfile(solution_path) and solution_path.endswith(".py"):
+                        total_num += 1
                         with open(solution_path, "r") as f:
                             completion = f.read()
+
+                        solution_id = solution_file_name[:-3]
+                        if correctness is None or \
+                           correctness is not None and correctness[send_task_id][solution_id] == True:
+                            correct_num += 1
+                            impl_wrong = False
+                        else:
+                            impl_wrong = True
                         yield {
                             "_identifier": solution_path,
-                            "task_id": task_id.replace("HumanEval_", "HumanEval/"),
+                            "task_id": send_task_id,
                             "solution": completion,
+                            "impl_wrong": impl_wrong,
+                            "solution_id": int(solution_id),
                         }
+        print(f"Correct rate: {correct_num}/{total_num} files")
+
 
 
 HUMANEVAL_OVERRIDE_PATH = os.environ.get("HUMANEVAL_OVERRIDE_PATH", None)
