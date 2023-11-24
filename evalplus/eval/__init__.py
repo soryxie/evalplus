@@ -200,8 +200,8 @@ def untrusted_check(
     fast_check: bool = False,
     min_time_limit: float = 0.1,
     gt_time_limit_factor: float = 2.0,
-    perf = False,
-) -> Union[Tuple[str, np.ndarray] , Tuple[str, float]]:
+    perf=False,
+) -> Union[Tuple[str, np.ndarray], Tuple[str, float]]:
     time_limits = [max(min_time_limit, gt_time_limit_factor * t) for t in ref_time]
     timeout = sum(time_limits) + 1
     if not fast_check:
@@ -249,7 +249,7 @@ def untrusted_check(
     if stat == SUCCESS:
         if len(details) != len(inputs) or not all(details):
             stat = FAILED
-        
+
     if perf:
         return stat, time_cost.value
 

@@ -1,17 +1,14 @@
 import argparse
-import sys
-import time
 import os
 import pickle
-import numpy as np
-from functools import reduce
+import sys
+import time
 from collections import namedtuple
+from functools import reduce
 
-from evalplus.data import (
-    CACHE_DIR,
-    get_human_eval_plus,
-    get_human_eval_plus_hash,
-)
+import numpy as np
+
+from evalplus.data import CACHE_DIR, get_human_eval_plus, get_human_eval_plus_hash
 
 CV_threshold = 0.02
 gt_perf_times = 2
@@ -33,8 +30,7 @@ def perf_exec(code, inputs, entry_point):
             latency = time.time_ns() - start
 
             if len(reocords) != len(inputs):
-                reocords.append(
-                    {"input": inp, "output": output, "rtime": [latency]})
+                reocords.append({"input": inp, "output": output, "rtime": [latency]})
             else:
                 reocords[index]["rtime"].append(latency)
 
@@ -70,17 +66,18 @@ def perf_groundtruth(problems, hashcode, base_only=False):
 
 # select the most diffcult input within the CV threshold
 def select_testcases(task_id, task_res, base_or_plus):
-    OneInputResult = namedtuple(
-        "OneInputResult", ["inp", "avg", "CV", "outp"])
+    OneInputResult = namedtuple("OneInputResult", ["inp", "avg", "CV", "outp"])
     testcases = []
     for inp_task in task_res[base_or_plus]:
         times = inp_task["rtime"]
-        testcases.append(OneInputResult(
-            inp=inp_task["input"],
-            outp=inp_task["output"],
-            avg=sum(times) / len(times) / 1e9,
-            CV=np.std(times) / np.mean(times)
-        ))
+        testcases.append(
+            OneInputResult(
+                inp=inp_task["input"],
+                outp=inp_task["output"],
+                avg=sum(times) / len(times) / 1e9,
+                CV=np.std(times) / np.mean(times),
+            )
+        )
 
     filtered_testcases = [elm for elm in testcases if elm.CV < CV_threshold]
 
@@ -122,11 +119,10 @@ def get_selected_groundtruth(problems, hashcode, base_only=False):
                 selected_results["selected_output"] += plus["selected_output"]
                 selected_results["selected_CV"] += plus["selected_CV"]
                 selected_results["selected_rtime"] += plus["selected_rtime"]
-            
+
             expected_output[task_id] = selected_results
 
         with open(cache_file, "wb") as f:
             pickle.dump(expected_output, f)
 
         return expected_output
-

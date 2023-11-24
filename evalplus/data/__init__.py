@@ -102,8 +102,11 @@ def load_solutions(sample_path: PathLike) -> Iterable[Dict]:
                             completion = f.read()
 
                         solution_id = solution_file_name[:-3]
-                        if correctness is None or \
-                           correctness is not None and correctness[send_task_id][solution_id] == True:
+                        if (
+                            correctness is None
+                            or correctness is not None
+                            and correctness[send_task_id][solution_id] == True
+                        ):
                             correct_num += 1
                             impl_wrong = False
                         else:
@@ -116,7 +119,6 @@ def load_solutions(sample_path: PathLike) -> Iterable[Dict]:
                             "solution_id": int(solution_id),
                         }
         print(f"Correct rate: {correct_num}/{total_num} files")
-
 
 
 HUMANEVAL_OVERRIDE_PATH = os.environ.get("HUMANEVAL_OVERRIDE_PATH", None)
