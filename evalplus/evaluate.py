@@ -14,27 +14,30 @@ from warnings import warn
 import numpy as np
 from tqdm import tqdm
 
-from evalplus._experimental.perf_groundtruth import get_selected_groundtruth
 from evalplus.data import (
-    CACHE_DIR,
     get_human_eval_plus,
     get_human_eval_plus_hash,
+    get_mbpp_plus,
+    get_mbpp_plus_hash,
     load_solutions,
 )
+from evalplus.data.utils import CACHE_DIR
 from evalplus.eval import (
     SUCCESS,
     compatible_eval_result,
     estimate_pass_at_k,
     untrusted_check,
 )
+from evalplus.eval._special_oracle import MBPP_OUTPUT_NOT_NONE_TASKS
+from evalplus.eval.perf_groundtruth import get_selected_groundtruth
 from evalplus.gen.util import trusted_exec
 
 # 1st item: the status
-# 2nd item (optional): the detailed pass/fail boolean for each input
-Result = Tuple[str, List[bool]]
+# 2nd item (optional): the time
+Result = Tuple[str, float]
 
 
-def get_groundtruth(problems, hashcode):
+def get_groundtruth(problems, hashcode, tasks_only_output_not_none):
     cache_file = os.path.join(CACHE_DIR, f"{hashcode}.pkl")
     if os.path.exists(cache_file):
         print(f"Load from ground-truth from {cache_file}")
@@ -51,6 +54,7 @@ def get_groundtruth(problems, hashcode):
             problem["base_input"],
             problem["entry_point"],
             record_time=True,
+            output_not_none=problem["entry_point"] in tasks_only_output_not_none,
         )
 
         oracle["plus"], oracle["plus_time"] = trusted_exec(
@@ -58,6 +62,7 @@ def get_groundtruth(problems, hashcode):
             problem["plus_input"],
             problem["entry_point"],
             record_time=True,
+            output_not_none=problem["entry_point"] in tasks_only_output_not_none,
         )
         expected_output[task_id] = oracle
     print(f"Expected outputs computed in {time.time() - tbegin:.2f}s")
@@ -69,6 +74,7 @@ def get_groundtruth(problems, hashcode):
 
 
 def check_correctness(
+    dataset: str,
     completion_id: int,
     problem: Dict[str, Any],
     solution: str,
@@ -78,17 +84,18 @@ def check_correctness(
     identifier=None,
     min_time_limit: float = 0.1,
     gt_time_limit_factor: float = 2.0,
-    perf=False,
-    impl_wrong=False,
+    perf=False,  # whether to profile the solution
+    impl_wrong=False,  # if the implementation is wrong, no need to profile
 ) -> Dict[str, Union[int, Optional[Result]]]:
     ret = {
         "completion_id": completion_id,
         "task_id": problem["task_id"],
         "_identifier": identifier,
     }
-    if perf:
+    if perf:  # profiling, only use selected inputs
         ret["perf_result"] = (
             untrusted_check(
+                dataset,
                 solution,
                 expected_output["selected_input"],
                 problem["entry_point"],
@@ -106,6 +113,7 @@ def check_correctness(
         return ret
 
     ret["base"] = untrusted_check(
+        dataset,
         solution,
         problem["base_input"],
         problem["entry_point"],
@@ -119,6 +127,7 @@ def check_correctness(
 
     if not base_only:
         ret["plus"] = untrusted_check(
+            dataset,
             solution,
             problem["plus_input"],
             problem["entry_point"],
@@ -133,7 +142,7 @@ def check_correctness(
     return ret
 
 
-def evaluate_humaneval(flags):
+def evaluate(flags):
     if flags.parallel is None:
         n_workers = max(1, multiprocessing.cpu_count() // 2)
     else:
@@ -152,14 +161,28 @@ def evaluate_humaneval(flags):
 
         results = compatible_eval_result(results)
     else:
-        problems = get_human_eval_plus(mini=flags.mini)
+        if flags.dataset == "humaneval":
+            problems = get_human_eval_plus(mini=flags.mini)
+            dataset_hash = get_human_eval_plus_hash()
+            expected_output = get_groundtruth(problems, dataset_hash, [])
+            selected_groundtruth = get_selected_groundtruth(
+                problems, dataset_hash, [], flags.base_only
+            )
+        elif flags.dataset == "mbpp":
+            problems = get_mbpp_plus(mini=flags.mini)
+            dataset_hash = get_mbpp_plus_hash()
+            expected_output = get_groundtruth(
+                problems,
+                dataset_hash,
+                MBPP_OUTPUT_NOT_NONE_TASKS,
+            )
+            selected_groundtruth = get_selected_groundtruth(
+                problems,
+                dataset_hash,
+                MBPP_OUTPUT_NOT_NONE_TASKS,
+                flags.base_only,
+            )
 
-        dataset_hash = get_human_eval_plus_hash()
-        expected_output = get_groundtruth(problems, dataset_hash)
-
-        selected_groundtruth = get_selected_groundtruth(
-            problems, dataset_hash, flags.base_only
-        )
         correctness_archive_path = os.path.join(
             flags.samples, "correctness_archive.json"
         )
@@ -170,10 +193,11 @@ def evaluate_humaneval(flags):
             "eval": {task_id: {} for task_id in expected_output.keys()},
         }
 
+        # need 1 for correctness check, and perf_times for profiling
         for perf_round in range(flags.sample_perf_times + 1):
             if perf_round == 0:
                 if os.path.isfile(correctness_archive_path):
-                    print(f"already checked correctness, skip round 0")
+                    print(f"already checked correctness, skip the first round")
                     continue
             else:
                 print(f"--------Re-sampling {perf_round} times...--------")
@@ -198,6 +222,7 @@ def evaluate_humaneval(flags):
                     completion_id[task_id] = sample["solution_id"]
                     args = (
                         (
+                            flags.dataset,
                             completion_id[task_id],
                             problems[task_id],
                             solution,
@@ -210,6 +235,7 @@ def evaluate_humaneval(flags):
                         )
                         if perf_round == 0
                         else (
+                            flags.dataset,
                             completion_id[task_id],
                             problems[task_id],
                             solution,
@@ -219,10 +245,8 @@ def evaluate_humaneval(flags):
                             sample["_identifier"],
                             flags.min_time_limit,
                             flags.gt_time_limit_factor,
-                            True,  # perf
-                            sample[
-                                "impl_wrong"
-                            ],  # no need to perf, if impl_wrong is True
+                            True,
+                            sample["impl_wrong"],
                         )
                     )
                     futures.append(executor.submit(check_correctness, *args))
@@ -231,11 +255,12 @@ def evaluate_humaneval(flags):
                 def stucking_checker():
                     while remainings:
                         last_size = len(remainings)
-                        time.sleep(10)
-                        if last_size == len(remainings) and len(remainings) > 0:
-                            print(f"Stucking for 10 seconds... {len(remainings)} left")
-                            for remaining in remainings:
-                                print(remaining)
+                        time.sleep(20)
+                        if last_size != len(remainings) or len(remainings) == 0:
+                            continue
+                        # Potential stucking
+                        warn("No samples had finished testing in the last 20s")
+                        warn(f"{len(remainings)} samples to be tested: {remainings}")
 
                 threading.Thread(target=stucking_checker).start()
 
@@ -263,56 +288,6 @@ def evaluate_humaneval(flags):
                 with open(correctness_archive_path, "w") as f:
                     json.dump(correctness_archive, f)
 
-                correctness_results = {}
-                correctness_results["eval"] = {}
-                correctness_results["eval"][task_id] = {
-                    "nfiles": len(task_results),
-                    "base": [x["base"] for x in task_results],
-                    "plus": [x["plus"] for x in task_results]
-                    if not flags.base_only
-                    else [],
-                }
-
-                # Calculate pass@k.
-                total = np.array(
-                    [r["nfiles"] for r in correctness_results["eval"].values()]
-                )
-                base_correct = []
-                new_correct = []
-
-                for res in correctness_results["eval"].values():
-                    bc = sum([r[0] == SUCCESS for r in res["base"]])
-                    base_correct.append(bc)
-                    if res["plus"]:
-                        new_correct.append(
-                            sum(
-                                [
-                                    res["plus"][i][0] == res["base"][i][0] == SUCCESS
-                                    for i in range(len(res["plus"]))
-                                ]
-                            )
-                        )
-                base_correct = np.array(base_correct)
-
-                pass_at_k = {
-                    f"pass@{k}": estimate_pass_at_k(total, base_correct, k).mean()
-                    for k in [1, 10, 100]
-                    if total.min() >= k
-                }
-                print("Base")
-                print(pass_at_k)
-
-                if new_correct:
-                    print("Base + Extra")
-                    pass_at_k = {
-                        f"pass@{k}": estimate_pass_at_k(
-                            total, np.array(new_correct), k
-                        ).mean()
-                        for k in [1, 10, 100]
-                        if (total >= k).all()
-                    }
-                    print(pass_at_k)
-
     if os.path.isfile(result_path) and flags.i_just_wanna_run:
         decision = ""
         while decision.lower() not in ["y", "n"]:
@@ -334,7 +309,9 @@ def evaluate_humaneval(flags):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", required=True, type=str)
+    parser.add_argument(
+        "--dataset", required=True, type=str, choices=["humaneval", "mbpp"]
+    )
     parser.add_argument("--samples", required=True, type=str)
     parser.add_argument("--base-only", action="store_true")
     parser.add_argument("--parallel", default=None, type=int)
@@ -346,10 +323,7 @@ def main():
     parser.add_argument("--sample-perf-times", default=2, type=int)
     args = parser.parse_args()
 
-    if args.dataset == "humaneval":
-        evaluate_humaneval(args)
-    else:
-        raise NotImplementedError("Unsupported dataset: {}".format(args.dataset))
+    evaluate(args)
 
 
 if __name__ == "__main__":

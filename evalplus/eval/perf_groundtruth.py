@@ -8,14 +8,15 @@ from functools import reduce
 
 import numpy as np
 
-from evalplus.data import CACHE_DIR, get_human_eval_plus, get_human_eval_plus_hash
+from evalplus.data import get_human_eval_plus, get_human_eval_plus_hash
+from evalplus.data.utils import CACHE_DIR
 
 CV_threshold = 0.02
 gt_perf_times = 2
 
 
 # execute code
-def perf_exec(code, inputs, entry_point):
+def perf_exec(code, inputs, entry_point, output_not_none=False):
     exec_globals = {}
     exec(code, exec_globals)
     fn = exec_globals[entry_point]
@@ -34,11 +35,15 @@ def perf_exec(code, inputs, entry_point):
             else:
                 reocords[index]["rtime"].append(latency)
 
+    if output_not_none:
+        for ret in reocords:
+            ret["output"] = True if ret["output"] is not None else False
+
     return reocords
 
 
 # perf framework
-def perf_groundtruth(problems, hashcode, base_only=False):
+def perf_groundtruth(problems, hashcode, tasks_only_output_not_none, base_only=False):
     print("Perfiling Groundtruth...")
     tbegin = time.time()
     perf_output = {}
@@ -48,6 +53,7 @@ def perf_groundtruth(problems, hashcode, base_only=False):
             problem["prompt"] + problem["canonical_solution"],
             problem["base_input"],
             problem["entry_point"],
+            output_not_none=problem["entry_point"] in tasks_only_output_not_none,
         )
         if base_only:
             perf_output[task_id] = oracle
@@ -57,6 +63,7 @@ def perf_groundtruth(problems, hashcode, base_only=False):
             problem["prompt"] + problem["canonical_solution"],
             problem["plus_input"],
             problem["entry_point"],
+            output_not_none=problem["entry_point"] in tasks_only_output_not_none,
         )
         perf_output[task_id] = oracle
     print(f"Perfiled Groundtruth in {time.time() - tbegin:.2f}s")
@@ -100,14 +107,18 @@ def select_testcases(task_id, task_res, base_or_plus):
 
 
 # generate selected groundtruth
-def get_selected_groundtruth(problems, hashcode, base_only=False):
+def get_selected_groundtruth(
+    problems, hashcode, tasks_only_output_not_none, base_only=False
+):
     cache_file = os.path.join(CACHE_DIR, f"{hashcode}_perf.pkl")
     if os.path.exists(cache_file):
-        print(f"Load from cached selected groundtruth from {cache_file}")
+        print(f"Load from perf groundtruth from {cache_file}")
         with open(cache_file, "rb") as f:
             return pickle.load(f)
     else:
-        perf_result = perf_groundtruth(problems, hashcode, base_only)
+        perf_result = perf_groundtruth(
+            problems, hashcode, tasks_only_output_not_none, base_only
+        )
 
         expected_output = {}
         for task_id, task_res in perf_result.items():
