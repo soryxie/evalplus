@@ -220,7 +220,7 @@ Here are some tips to speed up the evaluation:
 We also share pre-generated code samples from LLMs we have [evaluated](https://evalplus.github.io/leaderboard.html):
 
 * **HumanEval+**: See the attachment of our [v0.1.0 release](https://github.com/evalplus/evalplus/releases/tag/v0.1.0).
-* **MBPP+**: See the attachment of our v0.2.0 release (TBD).
+* **MBPP+**: See the attachment of our [v0.2.0 release](https://github.com/evalplus/evalplus/releases/tag/v0.2.0).
 
 Each sample file is packaged in a zip file named like `${model_name}_temp_${temperature}.zip`.
 You can unzip them to a folder named like `${model_name}_temp_${temperature}` and run the evaluation from scratch with:
@@ -247,7 +247,8 @@ Check LLM-produced code and answer the following questions:
 2. Are LLM-generated code compilable? (if no, something could be wrong and you'd better check)
 
 ```shell
-python tools/checker.py --folder /path/to/[model]-[??]b_temp_[??] --dataset [humaneval|mbpp]
+python tools/checker.py --samples samples.jsonl --dataset [humaneval|mbpp]
+# --samples can also be a directory organized as: ${SAMPLE_DIR}/${TASK_ID}/{SAMPLE_ID}.py
 ```
 
 ### Post code sanitizer
