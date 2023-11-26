@@ -172,3 +172,7 @@ MbppPlus*.jsonl
 MbppPlus*.gz
 evalplus/_version.py
 *mbpp.json
+
+# evalperf
+evalperf/data
+evalperf/models
