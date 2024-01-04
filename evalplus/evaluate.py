@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from warnings import warn
 
 import numpy as np
+from termcolor import cprint
 from tqdm import tqdm
 
 from evalplus.data import (
@@ -44,6 +45,7 @@ def get_groundtruth(problems, hashcode, tasks_only_output_not_none):
         with open(cache_file, "rb") as f:
             return pickle.load(f)
 
+    os.makedirs(CACHE_DIR, exist_ok=True)
     print("Computing expected output...")
     tbegin = time.time()
     expected_output = {}

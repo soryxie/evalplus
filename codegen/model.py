@@ -110,6 +110,15 @@ class VLlmDecoder(DecoderBase):
             kwargs["dtype"] = "float16"
         elif "deepseek" in name:
             kwargs["dtype"] = "bfloat16"
+        elif "mixtral" in name.lower():
+            kwargs["dtype"] = "bfloat16"
+        elif "solar" in name:
+            kwargs["dtype"] = "float16"
+        elif "mistral" in name.lower():
+            kwargs["dtype"] = "bfloat16"
+        elif "phi" in name.lower():
+            kwargs["dtype"] = "float16"
+            kwargs["trust_remote_code"] = True
 
         self.llm = LLM(model=name, **kwargs)
 
@@ -126,30 +135,70 @@ class VLlmDecoder(DecoderBase):
                 temperature=self.temperature,
                 max_tokens=self.max_new_tokens,
                 top_p=0.95 if do_sample else 1.0,
+                stop=self.eos,
             ),
             use_tqdm=False,
         )
 
         gen_strs = [x.outputs[0].text.replace("\t", "    ") for x in vllm_outputs]
-        outputs = []
-        # removes eos tokens.
-        for output in gen_strs:
-            min_index = 10000
-            for eos in self.eos:
-                if eos in output:
-                    # could be multiple eos in outputs, better pick minimum one
-                    min_index = min(min_index, output.index(eos))
-            outputs.append(output[:min_index])
-        return outputs
+        return gen_strs
 
 
-class WizardCoderDecoder(VLlmDecoder):
+# chatml format
+class ChatML(VLlmDecoder):
+    def __init__(self, name: str, **kwargs) -> None:
+        kwargs["conversational"] = True
+        super().__init__(name, **kwargs)
+        self.eos += ["\n```"]
+
     def codegen(
         self, prompt: str, do_sample: bool = True, num_samples: int = 200
     ) -> List[str]:
         if do_sample:
             assert self.temperature > 0, "Temperature must be greater than 0!"
 
+        input = f"""<|im_start|>system
+You are an intelligent programming assistant to produce Python algorithmic solutions<|im_end|>
+<|im_start|>user
+Can you complete the following Python function?
+```python
+{prompt}
+```
+<|im_end|>
+<|im_start|>assistant
+```python
+"""
+        return VLlmDecoder.codegen(self, input, do_sample, num_samples)
+
+
+class Solar(VLlmDecoder):
+    def __init__(self, name: str, **kwargs) -> None:
+        super().__init__(name, **kwargs)
+        self.eos += ["\n```"]
+
+    def codegen(
+        self, prompt: str, do_sample: bool = True, num_samples: int = 200
+    ) -> List[str]:
+        if do_sample:
+            assert self.temperature > 0, "Temperature must be greater than 0!"
+
+        input = f"""<s> ### User:
+Can you solve and complete the Python function below?
+```python
+{prompt}
+```
+
+### Assistant:
+Sure!
+```python
+"""
+        return VLlmDecoder.codegen(self, input, do_sample, num_samples)
+
+
+class WizardCoderDecoder(VLlmDecoder):
+    def codegen(
+        self, prompt: str, do_sample: bool = True, num_samples: int = 200
+    ) -> List[str]:
         prompt = f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.
 
 
@@ -158,19 +207,8 @@ Create a Python script for this problem:
 {prompt}
 
 ### Response:"""
-        batch_size = min(self.batch_size, num_samples)
 
-        vllm_outputs = self.llm.generate(
-            [prompt] * batch_size,
-            SamplingParams(
-                temperature=self.temperature,
-                max_tokens=self.max_new_tokens,
-                top_p=0.95 if do_sample else 1.0,
-            ),
-            use_tqdm=False,
-        )
-
-        return [x.outputs[0].text.replace("\t", "    ") for x in vllm_outputs]
+        return VLlmDecoder.codegen(self, prompt, do_sample, num_samples)
 
 
 class HFTorchDecoder(DecoderBase):
@@ -214,6 +252,10 @@ class HFTorchDecoder(DecoderBase):
             kwargs["torch_dtype"] = torch.bfloat16
         if "deepseek" in name:
             kwargs["torch_dtype"] = torch.bfloat16
+            self.skip_special_tokens = True
+        if "/phi" in name:
+            kwargs["torch_dtype"] = torch.float16
+            kwargs["trust_remote_code"] = True
             self.skip_special_tokens = True
 
         print(f"{kwargs = }")
@@ -335,10 +377,13 @@ class OpenAIChatDecoder(DecoderBase):
         assert batch_size <= 20, "Use larger batch size could blow up the memory!"
 
         # construct prompt
-        message = (
-            r'Please complete the following code snippet by generating JSON like {"code": ""}'
-            + f"\n```python\n{prompt.strip()}\n```"
-        )
+        fmt = "json_object" if self.name == "gpt-4-1106-preview" else "text"
+        if fmt == "json_object":
+            message = r'Please complete the following code snippet by generating JSON like {"code": ""}'
+        else:
+            message = r"Please generate code to complete the following problem:"
+
+        message += f"\n```python\n{prompt.strip()}\n```"
 
         ret = make_auto_request(
             self.client,
@@ -347,22 +392,23 @@ class OpenAIChatDecoder(DecoderBase):
             max_tokens=self.max_new_tokens,
             temperature=self.temperature,
             n=batch_size,
-            response_format={"type": "json_object"},
+            response_format={"type": fmt},
         )
 
         outputs = []
         for item in ret.choices:
             content = item.message.content
             # if json serializable
-            try:
-                json_data = json.loads(content)
-                if json_data.get("code", None) is not None:
-                    outputs.append(prompt + "\n" + json_data["code"])
-                    continue
+            if fmt == "json_object":
+                try:
+                    json_data = json.loads(content)
+                    if json_data.get("code", None) is not None:
+                        outputs.append(prompt + "\n" + json_data["code"])
+                        continue
 
-                print(f"'code' field not found in: {json_data}")
-            except Exception as e:
-                print(e)
+                    print(f"'code' field not found in: {json_data}")
+                except Exception as e:
+                    print(e)
             outputs.append(content)
 
         return outputs
@@ -871,6 +917,33 @@ def make_model(name: str, batch_size: int = 1, temperature: float = 0.8):
         return HFTorchDecoder(
             batch_size=batch_size,
             name="mistralai/Mistral-7B-v0.1",
+            temperature=temperature,
+        )
+    elif name == "dolphin-2.6":
+        return ChatML(
+            batch_size=batch_size,
+            name="cognitivecomputations/dolphin-2.6-mixtral-8x7b",
+            temperature=temperature,
+            max_new_tokens=512 + 256,
+        )
+    elif name == "solar-10.7b-instruct":
+        return Solar(
+            batch_size=batch_size,
+            name="upstage/SOLAR-10.7B-Instruct-v1.0",
+            temperature=temperature,
+            conversational=True,
+        )
+    elif name == "mistral-hermes-codepro-7b":
+        return ChatML(
+            batch_size=batch_size,
+            name="beowolx/MistralHermes-CodePro-7B-v1",
+            temperature=temperature,
+            max_new_tokens=512 + 256,
+        )
+    elif name == "phi-2":
+        return VLlmDecoder(
+            batch_size=batch_size,
+            name="microsoft/phi-2",
             temperature=temperature,
         )
 
