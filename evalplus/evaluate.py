@@ -240,6 +240,8 @@ def evaluate(flags):
                     if perf_round > 0:
                         args[4] = selected_groundtruth[task_id]  # use selected groundtruth
                     futures.append(executor.submit(check_correctness, *args))
+                    # TODO: if need to profile one-task-multi-solutions, file's order is important
+                    # we have to change 'completion_id' to 'sample_id' to make sure the order
                     completion_id[task_id] += 1
                     n_samples += 1
 
@@ -285,7 +287,8 @@ def evaluate(flags):
                     "perf_result": [x["perf_result"] for x in task_results],
                 }
 
-    # merge results: task_results -> ["success", average_rtime] or ["failed", 0]    
+    # merge results: task_results -> ["success", average_rtime] or ["failed", 0]  
+    # TODO: not consider one-task-multi-solutions
     for task_id, task_results in results["eval"].items():
         if any([x["perf_result"][0][0] == "failed" for x in task_results.values()]):
             results["eval"][task_id] = ["failed", 0]
