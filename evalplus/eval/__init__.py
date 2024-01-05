@@ -249,12 +249,12 @@ def untrusted_check(
     if not stat:
         stat = TIMEOUT
 
-    if stat == SUCCESS:
-        if len(details) != len(inputs) or not all(details):
-            stat = FAILED
-
     if perf:
         return stat, time_cost.value
+
+    if stat == SUCCESS and not perf:
+        if len(details) != len(inputs) or not all(details):
+            stat = FAILED
 
     return stat, details
 
