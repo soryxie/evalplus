@@ -284,7 +284,18 @@ def evaluate(flags):
                     "nfiles": len(task_results),
                     "perf_result": [x["perf_result"] for x in task_results],
                 }
-            
+
+    # merge results: task_results -> ["success", average_rtime] or ["failed", 0]    
+    for task_id, task_results in results["eval"].items():
+        if any([x["perf_result"][0][0] == "failed" for x in task_results.values()]):
+            results["eval"][task_id] = ["failed", 0]
+        else:
+            results["eval"][task_id] = [
+                "success",
+                np.mean(
+                    [x["perf_result"][0][1] for x in task_results.values()]
+                ),
+            ]
 
     if os.path.isfile(result_path) and flags.i_just_wanna_run:
         decision = ""
