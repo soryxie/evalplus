@@ -86,61 +86,49 @@ def check_correctness(
     identifier=None,
     min_time_limit: float = 0.1,
     gt_time_limit_factor: float = 2.0,
-    perf=False,  # whether to profile the solution
-    impl_wrong=False,  # if the implementation is wrong, no need to profile
+    perf=False,         # whether to profile the solution
+    impl_wrong=False,   # if the implementation is wrong, no need to profile
 ) -> Dict[str, Union[int, Optional[Result]]]:
     ret = {
         "completion_id": completion_id,
         "task_id": problem["task_id"],
         "_identifier": identifier,
     }
-    if perf:  # profiling, only use selected inputs
-        ret["perf_result"] = (
-            untrusted_check(
-                dataset,
-                solution,
-                expected_output["selected_input"],
-                problem["entry_point"],
-                expected=expected_output["selected_output"],
-                atol=problem["atol"],
-                ref_time=expected_output["selected_rtime"],
-                fast_check=fast_check,
-                min_time_limit=min_time_limit,
-                gt_time_limit_factor=gt_time_limit_factor,
-                perf=perf,
-            )
-            if not impl_wrong
-            else ("failed", [])
-        )
+
+    # if the implementation is wrong, no need to profile
+    if impl_wrong:
+        ret["perf_result"] = ("failed", [])
         return ret
 
-    ret["base"] = untrusted_check(
+    args = (
         dataset,
         solution,
-        problem["base_input"],
+        problem["base_input"],  # 2: input
         problem["entry_point"],
-        expected=expected_output["base"],
-        atol=problem["atol"],
-        ref_time=expected_output["base_time"],
-        fast_check=fast_check,
-        min_time_limit=min_time_limit,
-        gt_time_limit_factor=gt_time_limit_factor,
+        expected_output["base"],# 4: expected output
+        problem["atol"],
+        problem["base_time"],   # 6: time limit
+        fast_check,
+        min_time_limit,
+        gt_time_limit_factor,
+        perf,
     )
 
-    if not base_only:
-        ret["plus"] = untrusted_check(
-            dataset,
-            solution,
-            problem["plus_input"],
-            problem["entry_point"],
-            expected=expected_output["plus"],
-            atol=problem["atol"],
-            ref_time=expected_output["plus_time"],
-            fast_check=fast_check,
-            min_time_limit=min_time_limit,
-            gt_time_limit_factor=gt_time_limit_factor,
-        )
+    # profiling, only use selected inputs
+    if perf:
+        args[2] = problem["selected_input"]
+        args[4] = expected_output["selected_output"]
+        args[6] = problem["selected_time"]
+        ret["perf_result"] = untrusted_check(*args)
+        return ret
 
+    # Only check correctness for the first time
+    ret["base"] = untrusted_check(*args)
+    if not base_only:
+        args[2] = problem["plus_input"]
+        args[4] = expected_output["plus"]
+        args[6] = problem["plus_time"]
+        ret["plus"] = untrusted_check(*args)
     return ret
 
 
@@ -185,9 +173,13 @@ def evaluate(flags):
                 flags.base_only,
             )
 
+        task_correctness = None
         correctness_archive_path = os.path.join(
             flags.samples, "correctness_archive.json"
         )
+        if os.path.isfile(correctness_archive_path):
+            with open(correctness_archive_path, "r") as f:
+                task_correctness = json.load(f)
 
         results = {
             "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -198,11 +190,12 @@ def evaluate(flags):
         # need 1 for correctness check, and perf_times for profiling
         for perf_round in range(flags.sample_perf_times + 1):
             if perf_round == 0:
-                if os.path.isfile(correctness_archive_path):
-                    print(f"already checked correctness, skip the first round")
+                if task_correctness is not None:
+                    print(f"[Round 0]: Already have correctness results, skip correctness check")
                     continue
+                print(f"--------[Round 0]: Checking correctness...--------")
             else:
-                print(f"--------Re-sampling {perf_round} times...--------")
+                print(f"--------[Round {perf_round}]: Re-sampling {perf_round} times...--------")
                 n_workers = 1  # profiling need to be single-threaded
 
             with ProcessPoolExecutor(max_workers=n_workers) as executor:
@@ -220,39 +213,35 @@ def evaluate(flags):
                         if "solution" in sample
                         else problems[task_id]["prompt"] + sample["completion"]
                     )
+
+                    impl_wrong = False
+                    if task_correctness is not None and \
+                        not task_correctness[task_id][completion_id[task_id]]:
+                            impl_wrong = True
+
                     remainings.add(sample["_identifier"])
-                    completion_id[task_id] = sample["solution_id"]
                     args = (
-                        (
-                            flags.dataset,
-                            completion_id[task_id],
-                            problems[task_id],
-                            solution,
-                            expected_output[task_id],
-                            flags.base_only,
-                            not flags.test_details,  # fast_check
-                            sample["_identifier"],
-                            flags.min_time_limit,
-                            flags.gt_time_limit_factor,
-                        )
-                        if perf_round == 0
-                        else (
-                            flags.dataset,
-                            completion_id[task_id],
-                            problems[task_id],
-                            solution,
-                            selected_groundtruth[task_id],  # use selected groundtruth
-                            flags.base_only,
-                            not flags.test_details,
-                            sample["_identifier"],
-                            flags.min_time_limit,
-                            flags.gt_time_limit_factor,
-                            True,
-                            sample["impl_wrong"],
-                        )
+                        flags.dataset,
+                        completion_id[task_id],
+                        problems[task_id],
+                        solution,
+                        expected_output[task_id],
+                        flags.base_only,
+                        not flags.test_details,  # fast_check
+                        sample["_identifier"],
+                        flags.min_time_limit,
+                        flags.gt_time_limit_factor,
+                        perf_round > 0,  # whether to profile
+                        impl_wrong,
                     )
+                    if perf_round > 0:
+                        args[4] = selected_groundtruth[task_id]  # use selected groundtruth
                     futures.append(executor.submit(check_correctness, *args))
+                    completion_id[task_id] += 1
                     n_samples += 1
+
+                assert n_samples == len(remainings), "Missing problems in unfinished"
+                assert len(completion_id) == len(problems), "Missing problems in samples"
 
                 def stucking_checker():
                     while remainings:
@@ -271,15 +260,7 @@ def evaluate(flags):
                     remainings.remove(result["_identifier"])
                     eval_results[result["task_id"]].append(result)
 
-            if perf_round > 0:
-                # sort the results for each problem by completion_id
-                for task_id, task_results in eval_results.items():
-                    task_results.sort(key=lambda x: x["completion_id"])
-                    results["eval"][task_id][perf_round - 1] = {
-                        "nfiles": len(task_results),
-                        "perf_result": [x["perf_result"] for x in task_results],
-                    }
-            else:
+            if correctness_archive is None:
                 correctness_archive = {}
                 for task_id, task_results in eval_results.items():
                     task_results.sort(key=lambda x: x["completion_id"])
@@ -289,6 +270,18 @@ def evaluate(flags):
                     }
                 with open(correctness_archive_path, "w") as f:
                     json.dump(correctness_archive, f)
+            
+            if perf_round == 0:
+                continue
+
+            # sort the results for each problem by completion_id
+            for task_id, task_results in eval_results.items():
+                task_results.sort(key=lambda x: x["completion_id"])
+                results["eval"][task_id][perf_round - 1] = {
+                    "nfiles": len(task_results),
+                    "perf_result": [x["perf_result"] for x in task_results],
+                }
+            
 
     if os.path.isfile(result_path) and flags.i_just_wanna_run:
         decision = ""
