@@ -100,34 +100,37 @@ def check_correctness(
         ret["perf_result"] = ("failed", [])
         return ret
 
-    args = (
+    args = [
         dataset,
         solution,
-        problem["base_input"],  # 2: input
+        None,          # 2: input
         problem["entry_point"],
-        expected_output["base"],# 4: expected output
+        None,        # 4: expected output
         problem["atol"],
-        problem["base_time"],   # 6: time limit
+        None,   # 6: time limit
         fast_check,
         min_time_limit,
         gt_time_limit_factor,
         perf,
-    )
+    ]
 
     # profiling, only use selected inputs
     if perf:
-        args[2] = problem["selected_input"]
+        args[2] = expected_output["selected_input"]
         args[4] = expected_output["selected_output"]
-        args[6] = problem["selected_time"]
+        args[6] = expected_output["selected_rtime"]
         ret["perf_result"] = untrusted_check(*args)
         return ret
 
     # Only check correctness for the first time
+    args[2] = problem["base_input"]
+    args[4] = expected_output["base"]
+    args[6] = expected_output["base_time"]
     ret["base"] = untrusted_check(*args)
     if not base_only:
         args[2] = problem["plus_input"]
         args[4] = expected_output["plus"]
-        args[6] = problem["plus_time"]
+        args[6] = expected_output["plus_time"]
         ret["plus"] = untrusted_check(*args)
     return ret
 
@@ -216,11 +219,11 @@ def evaluate(flags):
 
                     impl_wrong = False
                     if task_correctness is not None and \
-                        not task_correctness[task_id][completion_id[task_id]]:
+                        not task_correctness[task_id][str(completion_id[task_id])]:
                             impl_wrong = True
 
                     remainings.add(sample["_identifier"])
-                    args = (
+                    args = [
                         flags.dataset,
                         completion_id[task_id],
                         problems[task_id],
@@ -233,7 +236,7 @@ def evaluate(flags):
                         flags.gt_time_limit_factor,
                         perf_round > 0,  # whether to profile
                         impl_wrong,
-                    )
+                    ]
                     if perf_round > 0:
                         args[4] = selected_groundtruth[task_id]  # use selected groundtruth
                     futures.append(executor.submit(check_correctness, *args))
@@ -260,16 +263,16 @@ def evaluate(flags):
                     remainings.remove(result["_identifier"])
                     eval_results[result["task_id"]].append(result)
 
-            if correctness_archive is None:
-                correctness_archive = {}
+            if task_correctness is None:
+                task_correctness = {}
                 for task_id, task_results in eval_results.items():
                     task_results.sort(key=lambda x: x["completion_id"])
-                    correctness_archive[task_id] = {
-                        x["completion_id"]: True if x["plus"][0] == SUCCESS else False
+                    task_correctness[task_id] = {
+                        str(x["completion_id"]): True if x["plus"][0] == SUCCESS else False
                         for x in task_results
                     }
                 with open(correctness_archive_path, "w") as f:
-                    json.dump(correctness_archive, f)
+                    json.dump(task_correctness, f)
             
             if perf_round == 0:
                 continue
@@ -315,7 +318,7 @@ def main():
     parser.add_argument("--min-time-limit", default=0.2, type=float)
     parser.add_argument("--gt-time-limit-factor", default=4.0, type=float)
     parser.add_argument("--mini", action="store_true")
-    parser.add_argument("--sample-perf-times", default=2, type=int)
+    parser.add_argument("--sample-perf-times", default=5, type=int)
     args = parser.parse_args()
 
     evaluate(args)
