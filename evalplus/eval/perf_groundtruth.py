@@ -47,7 +47,7 @@ def perf_exec(code, inputs, entry_point, output_not_none=False):
 def perf_groundtruth(problems, hashcode, tasks_only_output_not_none):
     """
     Perf groundtruth for all tasks
-    Output: {task_id: { "base": [{"input": input, "output": output, "rtime": [runtimes]}], 
+    Output: {task_id: { "base": [{"input": input, "output": output, "rtime": [runtimes]}],
                         "plus": [{"input": input, "output": output, "rtime": [runtimes]}]}}
     """
     print("Perfiling Groundtruth...")
@@ -55,13 +55,13 @@ def perf_groundtruth(problems, hashcode, tasks_only_output_not_none):
     perf_output = {}
 
     for task_id, problem in problems.items():
-        records = perf_exec( # base
+        records = perf_exec(  # base
             problem["prompt"] + problem["canonical_solution"],
             problem["base_input"],
             problem["entry_point"],
             output_not_none=problem["entry_point"] in tasks_only_output_not_none,
         )
-        records += perf_exec( # plus
+        records += perf_exec(  # plus
             problem["prompt"] + problem["canonical_solution"],
             problem["plus_input"],
             problem["entry_point"],
@@ -78,25 +78,30 @@ def select_testcases(task_id, task_results):
     Select testcases for one task
     Perf every input 5 times, calculate 5 runtimes' CV, if CV < 0.02, select this input
     """
-    OneInputRecord = namedtuple("OneInputRecord", ["input", "output", "runtime_avg", "runtime_cv"])
+    OneInputRecord = namedtuple(
+        "OneInputRecord", ["input", "output", "runtime_avg", "runtime_cv"]
+    )
     testcases = []
 
     for result in task_results:
         times = result["rtime"]
         testcases.append(
             OneInputRecord(
-                input       = result["input"],
-                output      = result["output"],
-                runtime_avg = sum(times) / len(times) * 1e-9,
-                runtime_cv  = np.std(times) / np.mean(times),
+                input=result["input"],
+                output=result["output"],
+                runtime_avg=sum(times) / len(times) * 1e-9,
+                runtime_cv=np.std(times) / np.mean(times),
             )
         )
 
     filtered_testcases = [elm for elm in testcases if elm.runtime_cv < CV_threshold]
 
     result = {
-        "task_id": task_id, "satis_input_num": len(filtered_testcases),
-        "selected_input": [], "selected_output": [], "selected_rtime": [],
+        "task_id": task_id,
+        "satis_input_num": len(filtered_testcases),
+        "selected_input": [],
+        "selected_output": [],
+        "selected_rtime": [],
     }
     for testcase in filtered_testcases:
         result["selected_input"].append(testcase.input)
@@ -105,10 +110,12 @@ def select_testcases(task_id, task_results):
     return result
 
 
-def get_groundtruth_with_selected_testcases(problems, hashcode, tasks_only_output_not_none):
+def get_groundtruth_with_selected_testcases(
+    problems, hashcode, tasks_only_output_not_none
+):
     """
     Get groundtruth with selected testcases
-    Output: {task_id: { "task_id": task_id, "satis_input_num": int, 
+    Output: {task_id: { "task_id": task_id, "satis_input_num": int,
                         "selected_input": [inputs], "selected_output": [outputs], "selected_rtime": [runtimes]}}
     """
     cache_file = os.path.join(CACHE_DIR, f"{hashcode}_perf.pkl")
@@ -119,8 +126,8 @@ def get_groundtruth_with_selected_testcases(problems, hashcode, tasks_only_outpu
     else:
         perf_result = perf_groundtruth(problems, hashcode, tasks_only_output_not_none)
         expected_output = {
-            task_id: select_testcases(task_id, task_results) 
-                for task_id, task_results in perf_result.items()
+            task_id: select_testcases(task_id, task_results)
+            for task_id, task_results in perf_result.items()
         }
         with open(cache_file, "wb") as f:
             pickle.dump(expected_output, f)

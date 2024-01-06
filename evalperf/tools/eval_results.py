@@ -56,7 +56,9 @@ class AllModelResults:
                 continue
 
             # clustering, get centroids and clusters
-            kmeans = KMeans(n_clusters=min(k, len(avgs)), random_state=seed, n_init='auto')
+            kmeans = KMeans(
+                n_clusters=min(k, len(avgs)), random_state=seed, n_init="auto"
+            )
             kmeans.fit(avgs.reshape(-1, 1))
             centroids = kmeans.cluster_centers_
             labels = kmeans.labels_
@@ -68,13 +70,15 @@ class AllModelResults:
             clusters = [clusters[i] for i in range(len(centroids))]
             centroids = centroids.reshape(-1).tolist()
             centroids, clusters = zip(*sorted(zip(centroids, clusters)))
-            
-            print(f"[Clustering SUCC] Task {task_id}: {len(model_names)} models, get {len(centroids)} clusters")
+
+            print(
+                f"[Clustering SUCC] Task {task_id}: {len(model_names)} models, get {len(centroids)} clusters"
+            )
             self.outputs[task_id]["centroids"] = centroids
             self.outputs[task_id]["clusters"] = clusters
-                
+
     def cal_cv(self):
-        """ Calculate the coefficient of variation of every task. """
+        """Calculate the coefficient of variation of every task."""
         for task_id, model_results in self.model_results.items():
             avgs = np.array([], dtype=float)
             for model_name, task_result in model_results.items():
@@ -87,12 +91,14 @@ class AllModelResults:
             self.outputs[task_id]["cv"] = cv
 
     def save_results_to_excel(self, output_dir: str):
-        """ Save the results to excel. """
+        """Save the results to excel."""
         excel_output = {task_id: {} for task_id in self.model_results.keys()}
         for task_id, task_result in self.outputs.items():
             excel_output[task_id]["cv"] = task_result["cv"]
             for i in range(len(task_result["centroids"])):
-                excel_output[task_id][f"clusters{i}"] = [f"{task_result['centroids'][i]:.2e}"] + task_result["clusters"][i]
+                excel_output[task_id][f"clusters{i}"] = [
+                    f"{task_result['centroids'][i]:.2e}"
+                ] + task_result["clusters"][i]
         df = pd.DataFrame.from_dict(excel_output, orient="index")
         df.to_excel(os.path.join(output_dir, "task_cv.xlsx"))
 
@@ -121,9 +127,13 @@ class AllModelResults:
                         if task_result[1] > controid:
                             break
                         battled_clusters += 1
-                    battled_models = sum([len(cluster) for cluster in clusters[:battled_clusters]])
-                    model_scores[task_id][model_name] = battled_models / len(model_results) * 100
-        
+                    battled_models = sum(
+                        [len(cluster) for cluster in clusters[:battled_clusters]]
+                    )
+                    model_scores[task_id][model_name] = (
+                        battled_models / len(model_results) * 100
+                    )
+
         # save the results to excel
         df = pd.DataFrame.from_dict(model_scores, orient="index")
         df = df.transpose()

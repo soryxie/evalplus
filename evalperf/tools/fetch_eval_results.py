@@ -7,8 +7,12 @@ import shutil
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, choices=["humaneval", "mbpp"], default="humaneval")
-    parser.add_argument("--models-dir", type=str, default="/data/songrun-data/evalperf/model")
+    parser.add_argument(
+        "--dataset", type=str, choices=["humaneval", "mbpp"], default="humaneval"
+    )
+    parser.add_argument(
+        "--models-dir", type=str, default="/data/songrun-data/evalperf/model"
+    )
     parser.add_argument("--output-dir", type=str, default="./evalperf/data")
     args = parser.parse_args()
 

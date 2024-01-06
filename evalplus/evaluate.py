@@ -86,8 +86,8 @@ def check_correctness(
     identifier=None,
     min_time_limit: float = 0.1,
     gt_time_limit_factor: float = 2.0,
-    perf=False,         # whether to profile the solution
-    impl_wrong=False,   # if the implementation is wrong, no need to profile
+    perf=False,  # whether to profile the solution
+    impl_wrong=False,  # if the implementation is wrong, no need to profile
 ) -> Dict[str, Union[int, Optional[Result]]]:
     ret = {
         "completion_id": completion_id,
@@ -103,11 +103,11 @@ def check_correctness(
     args = [
         dataset,
         solution,
-        None,          # 2: input
+        None,  # 2: input
         problem["entry_point"],
-        None,        # 4: expected output
+        None,  # 4: expected output
         problem["atol"],
-        None,   # 6: time limit
+        None,  # 6: time limit
         fast_check,
         min_time_limit,
         gt_time_limit_factor,
@@ -194,11 +194,15 @@ def evaluate(flags):
         for perf_round in range(flags.sample_perf_times + 1):
             if perf_round == 0:
                 if task_correctness is not None:
-                    print(f"[Round 0]: Already have correctness results, skip correctness check")
+                    print(
+                        f"[Round 0]: Already have correctness results, skip correctness check"
+                    )
                     continue
                 print(f"--------[Round 0]: Checking correctness...--------")
             else:
-                print(f"--------[Round {perf_round}]: Re-sampling {perf_round} times...--------")
+                print(
+                    f"--------[Round {perf_round}]: Re-sampling {perf_round} times...--------"
+                )
                 n_workers = 1  # profiling need to be single-threaded
 
             with ProcessPoolExecutor(max_workers=n_workers) as executor:
@@ -218,9 +222,11 @@ def evaluate(flags):
                     )
 
                     impl_wrong = False
-                    if task_correctness is not None and \
-                        not task_correctness[task_id][str(completion_id[task_id])]:
-                            impl_wrong = True
+                    if (
+                        task_correctness is not None
+                        and not task_correctness[task_id][str(completion_id[task_id])]
+                    ):
+                        impl_wrong = True
 
                     remainings.add(sample["_identifier"])
                     args = [
@@ -238,7 +244,9 @@ def evaluate(flags):
                         impl_wrong,
                     ]
                     if perf_round > 0:
-                        args[4] = selected_groundtruth[task_id]  # use selected groundtruth
+                        args[4] = selected_groundtruth[
+                            task_id
+                        ]  # use selected groundtruth
                     futures.append(executor.submit(check_correctness, *args))
                     # TODO: if need to profile one-task-multi-solutions, file's order is important
                     # we have to change 'completion_id' to 'sample_id' to make sure the order
@@ -246,7 +254,9 @@ def evaluate(flags):
                     n_samples += 1
 
                 assert n_samples == len(remainings), "Missing problems in unfinished"
-                assert len(completion_id) == len(problems), "Missing problems in samples"
+                assert len(completion_id) == len(
+                    problems
+                ), "Missing problems in samples"
 
                 def stucking_checker():
                     while remainings:
@@ -270,12 +280,14 @@ def evaluate(flags):
                 for task_id, task_results in eval_results.items():
                     task_results.sort(key=lambda x: x["completion_id"])
                     task_correctness[task_id] = {
-                        str(x["completion_id"]): True if x["plus"][0] == SUCCESS else False
+                        str(x["completion_id"]): True
+                        if x["plus"][0] == SUCCESS
+                        else False
                         for x in task_results
                     }
                 with open(correctness_archive_path, "w") as f:
                     json.dump(task_correctness, f)
-            
+
             if perf_round == 0:
                 continue
 
@@ -287,7 +299,7 @@ def evaluate(flags):
                     "perf_result": [x["perf_result"] for x in task_results],
                 }
 
-    # merge results: task_results -> ["success", average_rtime] or ["failed", 0]  
+    # merge results: task_results -> ["success", average_rtime] or ["failed", 0]
     # TODO: not consider one-task-multi-solutions
     for task_id, task_results in results["eval"].items():
         if any([x["perf_result"][0][0] == "failed" for x in task_results.values()]):
@@ -295,9 +307,7 @@ def evaluate(flags):
         else:
             results["eval"][task_id] = [
                 "success",
-                np.mean(
-                    [x["perf_result"][0][1] for x in task_results.values()]
-                ),
+                np.mean([x["perf_result"][0][1] for x in task_results.values()]),
             ]
 
     if os.path.isfile(result_path) and flags.i_just_wanna_run:
