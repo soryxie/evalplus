@@ -30,7 +30,7 @@ from evalplus.eval import (
     untrusted_check,
 )
 from evalplus.eval._special_oracle import MBPP_OUTPUT_NOT_NONE_TASKS
-from evalplus.eval.perf_groundtruth import get_selected_groundtruth
+from evalplus.eval.perf_groundtruth import get_groundtruth_with_selected_testcases
 from evalplus.gen.util import trusted_exec
 
 # 1st item : the status
@@ -153,13 +153,14 @@ def evaluate(flags):
             results = json.load(f)
 
         results = compatible_eval_result(results)
+        return
     else:
         if flags.dataset == "humaneval":
             problems = get_human_eval_plus(mini=flags.mini)
             dataset_hash = get_human_eval_plus_hash()
             expected_output = get_groundtruth(problems, dataset_hash, [])
-            selected_groundtruth = get_selected_groundtruth(
-                problems, dataset_hash, [], flags.base_only
+            selected_groundtruth = get_groundtruth_with_selected_testcases(
+                problems, dataset_hash, []
             )
         elif flags.dataset == "mbpp":
             problems = get_mbpp_plus(mini=flags.mini)
@@ -169,11 +170,10 @@ def evaluate(flags):
                 dataset_hash,
                 MBPP_OUTPUT_NOT_NONE_TASKS,
             )
-            selected_groundtruth = get_selected_groundtruth(
+            selected_groundtruth = get_groundtruth_with_selected_testcases(
                 problems,
                 dataset_hash,
                 MBPP_OUTPUT_NOT_NONE_TASKS,
-                flags.base_only,
             )
 
         task_correctness = None

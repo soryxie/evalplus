@@ -2,149 +2,102 @@ import argparse
 import json
 import os
 from collections import namedtuple
+from typing import Dict, List, Tuple, Union
 
 import numpy as np
+from sklearn.cluster import KMeans
 
 k = 4
-k_means_iters = 10000000
-perf_times = 10
-avg_result_path = "./model_avg_data.json"
 
 
-def process_model_avg_data(model_results_path: str):
-    model_avg_data = {}
+class AllModelResults:
+    def __init__(self, model_results_path: str):
+        self.model_results_path = model_results_path
+        self.model_results = self.gather_all_models_results()
+        self.outputs = {task_id: {} for task_id in self.model_results.keys()}
 
-    files = os.listdir(model_results_path)
+    def gather_all_models_results(self) -> Dict[str, Dict[str, float]]:
+        """
+        Gather all models' results into one json file.
+        Each model's results: {task_id: ["success", average_rtime] or ["failed", 0]}
+        Gathered results: {task_id: {model_name: [task_results]}}
+        """
+        model_results = {}
 
-    for file in files:
-        if os.path.isfile(os.path.join(model_results_path, file)) and ".json" in file:
-            print("{} in this directory".format(file))
+        files = os.listdir(self.model_results_path)
+        for file in files:
+            file_path = os.path.join(self.model_results_path, file)
+            if os.path.isfile(file_path) and ".json" in file:
+                print(f"{file} in this directory")
+                model_result = json.load(open(file_path, "r"))["eval"]
+                for task_id, task_result in model_result.items():
+                    if task_id not in model_results:
+                        model_results[task_id] = {}
+                    model_results[task_id][file[:-5]] = task_result
 
-            res = json.load(open(model_results_path + file, "r"))["eval"]
-            for task_id, task_results in res.items():
-                if task_results:
-                    file_number = len(task_results["0"]["perf_result"])
-            print("file_number is", file_number)
+        return model_results
 
-            for task_id, task_results in res.items():
-                total_sum = 0
-                total_n, total_plus_n = 0, 0
+    def clustering(self, k: int, seed: int):
+        """
+        For each task, cluster the models based on their average runtime.
+        """
+        for task_id, model_results in self.model_results.items():
+            avgs = np.array([], dtype=float)
+            model_names = []
+            for model_name, task_result in model_results.items():
+                if task_result[0] == "success":
+                    avgs = np.append(avgs, task_result[1])
+                    model_names.append(model_name)
+            if len(avgs) == 0:
+                print(f"[Clustering FAIL] Task {task_id}: No model success")
+                self.outputs[task_id]["centroids"] = []
+                self.outputs[task_id]["clusters"] = dict()
+                continue
 
-                for file_no in range(file_number):
-                    succ_n = 0
-                    rtime_sum = 0
-                    rtime_avg = 0.0
-                    for run_time in range(perf_times):
-                        if str(run_time) in task_results:
-                            status = task_results[str(run_time)]["perf_result"][
-                                file_no
-                            ][0]
-                            if status == "success":
-                                succ_n += 1
-                                rtime_sum += task_results[str(run_time)]["perf_result"][
-                                    file_no
-                                ][1]
+            kmeans = KMeans(n_clusters=min(k, len(avgs)), random_state=seed, n_init='auto')
+            kmeans.fit(avgs.reshape(-1, 1))
+            centroids = kmeans.cluster_centers_
+            labels = kmeans.labels_
 
-                    if succ_n == perf_times:
-                        total_sum += rtime_sum
-                        total_n += perf_times
+            clusters = {i: [] for i in range(k)}
+            for i in range(len(model_names)):
+                clusters[labels[i]].append(model_names[i])
+            
+            print(f"[Clustering SUCC] Task {task_id}: {len(model_names)} models, get {len(centroids)} clusters")
+            self.outputs[task_id]["centroids"] = centroids.tolist()
+            self.outputs[task_id]["clusters"] = clusters
+                
+    def cal_cv(self):
+        """ Calculate the coefficient of variation of every task. """
+        for task_id, model_results in self.model_results.items():
+            avgs = np.array([], dtype=float)
+            for model_name, task_result in model_results.items():
+                if task_result[0] == "success":
+                    avgs = np.append(avgs, task_result[1])
+            if len(avgs) == 0:
+                self.outputs[task_id]["cv"] = 0
+                continue
+            cv = np.std(avgs) / np.mean(avgs)
+            self.outputs[task_id]["cv"] = cv
 
-                if task_id not in model_avg_data:
-                    model_avg_data[task_id] = {}
-                model_avg_data[task_id][file[:-5]] = (
-                    (total_sum / total_n) if total_n else 0
-                )
+    def save_results_to_excel(self, output_dir: str):
+        """ Save the results to excel. """
+        import pandas as pd
+        excel_output = {task_id: {} for task_id in self.model_results.keys()}
+        for task_id, task_result in self.outputs.items():
+            excel_output[task_id]["cv"] = task_result["cv"]
+            for i in range(len(task_result["centroids"])):
+                if i >= len(task_result["centroids"]):
+                    excel_output[task_id][f"clusters{i}"] = []
+                excel_output[task_id][f"clusters{i}"] = [f"{task_result['centroids'][i][0]:.2e}"] + task_result["clusters"][i]
+        df = pd.DataFrame.from_dict(excel_output, orient="index")
+        df.to_excel(os.path.join(output_dir, "task_cv.xlsx"))
 
-    with open(avg_result_path, "w") as f:
-        json.dump(model_avg_data, f)
-
-
-def k_means_clustering(data, k, max_iterations):
-    centroids = np.random.choice(data, size=k, replace=False)
-
-    for _ in range(max_iterations):
-        distances = np.abs(data[:, np.newaxis] - centroids)
-        clusters = np.argmin(distances, axis=1)
-        new_centroids = np.array([data[clusters == i].mean() for i in range(k)])
-        if np.all(centroids == new_centroids):
-            break
-        centroids = new_centroids
-
-    return clusters, centroids
-
-
-def print_task_cv():
-    data = json.load(open(avg_result_path, "r"))
-    selected_models = []
-    clu_res = {}
-    print("{}\t{}\t{}\t{}".format("task_id", "k-means-cv", "groups", "rtime"))
-    for task_id, task_results in data.items():
-        avgs = np.array([], dtype=float)
-        for model, avg in task_results.items():
-            if avg > 0:
-                avgs = np.append(avgs, avg)
-        if len(avgs) >= k:
-            clusters, centroids = k_means_clustering(avgs, k, k_means_iters)
-        else:
-            centroids = avgs
-        if len(centroids) > 0:
-            mean = np.mean(centroids)
-            std = np.std(centroids)
-            cv = np.abs(std / mean)
-            print("{}\t{}\t{}\t{}".format(task_id, cv, len(centroids), mean))
-        else:
-            print("{}\t{}".format(task_id, "No data"))
-
-        clu_res[task_id] = centroids.tolist()
-    with open("clu_res.json", "w") as f:
-        json.dump(clu_res, f)
-
-
-def ranking_all_models_by_perf(select_tasks_path: str):
-
-    data = json.load(open(avg_result_path, "r"))
-    clusters = json.load(open("clu_res.json", "r"))
-    with open(select_tasks_path, "r") as file:
-        lines = file.readlines()
-    selected_task_id = [line.strip() for line in lines]
-
-    selected_models = {}
-
-    for task_id, task_results in data.items():
-        if task_id not in selected_task_id:
-            continue
-        avgs = np.array([], dtype=float)
-        centroids = clusters[task_id]
-        centroids.append(0)
-        centroids = sorted(centroids)
-
-        for model, avg in task_results.items():
-            if model not in selected_models:
-                selected_models[model] = {}
-
-            for level in range(1, len(centroids)):
-                if centroids[len(centroids) - 1] < avg:
-                    selected_models[model][task_id] = 5
-                    break
-                if centroids[level - 1] < avg and avg <= centroids[level]:
-                    selected_models[model][task_id] = 5 * level / len(centroids)
-                    break
-
-    selected_task_id = sorted(selected_task_id, key=lambda x: int(x[len("Mbpp_") :]))
-
-    print("problem\t", end="")
-    for task_id in selected_task_id:
-        print(f"{task_id}\t", end="")
-    print("")
-
-    for model in selected_models:
-        print(f"{model}\t", end="")
-        for task_id in selected_task_id:
-            if task_id in selected_models[model]:
-                print(f"{selected_models[model][task_id]}\t", end="")
-            else:
-                print("\t", end="")
-        print("")
+    def ranking_all_models_by_perf(self, select_tasks_path: str, output_dir: str):
+        """
+        Rank all models by their performance.
+        """
+        pass
 
 
 if __name__ == "__main__":
@@ -152,14 +105,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset", type=str, choices=["humaneval", "mbpp"], default="humaneval"
     )
+    parser.add_argument("--data-dir", type=str, default="./evalperf/data/humaneval")
+    parser.add_argument("--output-dir", type=str, default="./evalperf/data/results")
     args = parser.parse_args()
 
-    model_results_path = f"../data/{args.dataset}/"
+    data_dir = args.data_dir
+    output_dir = args.output_dir
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
     select_tasks_path = f"./selected_{args.dataset}_tasks.txt"
 
-    # 1. generate avg_result.json
-    process_model_avg_data(model_results_path)
-    # 2. generate clu_res.json and task cv table
-    print_task_cv()
-    # 3. generate ranking table
-    ranking_all_models_by_perf(select_tasks_path)
+    all_model_results = AllModelResults(data_dir)
+    all_model_results.clustering(k, 777)
+    all_model_results.cal_cv()
+    all_model_results.save_results_to_excel(output_dir)
+    all_model_results.ranking_all_models_by_perf(select_tasks_path, output_dir)
