@@ -5,6 +5,7 @@ from collections import namedtuple
 from typing import Dict, List, Tuple, Union
 
 import numpy as np
+import pandas as pd
 from sklearn.cluster import KMeans
 
 k = 4
@@ -54,17 +55,22 @@ class AllModelResults:
                 self.outputs[task_id]["clusters"] = dict()
                 continue
 
+            # clustering, get centroids and clusters
             kmeans = KMeans(n_clusters=min(k, len(avgs)), random_state=seed, n_init='auto')
             kmeans.fit(avgs.reshape(-1, 1))
             centroids = kmeans.cluster_centers_
             labels = kmeans.labels_
-
-            clusters = {i: [] for i in range(k)}
+            clusters = {i: [] for i in range(len(centroids))}
             for i in range(len(model_names)):
                 clusters[labels[i]].append(model_names[i])
+
+            # flatten and sort
+            clusters = [clusters[i] for i in range(len(centroids))]
+            centroids = centroids.reshape(-1).tolist()
+            centroids, clusters = zip(*sorted(zip(centroids, clusters)))
             
             print(f"[Clustering SUCC] Task {task_id}: {len(model_names)} models, get {len(centroids)} clusters")
-            self.outputs[task_id]["centroids"] = centroids.tolist()
+            self.outputs[task_id]["centroids"] = centroids
             self.outputs[task_id]["clusters"] = clusters
                 
     def cal_cv(self):
@@ -82,22 +88,46 @@ class AllModelResults:
 
     def save_results_to_excel(self, output_dir: str):
         """ Save the results to excel. """
-        import pandas as pd
         excel_output = {task_id: {} for task_id in self.model_results.keys()}
         for task_id, task_result in self.outputs.items():
             excel_output[task_id]["cv"] = task_result["cv"]
             for i in range(len(task_result["centroids"])):
-                if i >= len(task_result["centroids"]):
-                    excel_output[task_id][f"clusters{i}"] = []
-                excel_output[task_id][f"clusters{i}"] = [f"{task_result['centroids'][i][0]:.2e}"] + task_result["clusters"][i]
+                excel_output[task_id][f"clusters{i}"] = [f"{task_result['centroids'][i]:.2e}"] + task_result["clusters"][i]
         df = pd.DataFrame.from_dict(excel_output, orient="index")
         df.to_excel(os.path.join(output_dir, "task_cv.xlsx"))
 
-    def ranking_all_models_by_perf(self, select_tasks_path: str, output_dir: str):
+    def ranking_all_models_by_perf(self, output_dir: str):
         """
         Rank all models by their performance.
         """
-        pass
+        model_scores = {task_id: {} for task_id in self.model_results.keys()}
+        for task_id, model_results in self.model_results.items():
+            # filter out low CV tasks
+            if self.outputs[task_id]["cv"] < 0.2:
+                continue
+
+            # calculate the score of each model
+            # assume the centroids are sorted
+            # the score of a model is the number of models that have a higher result than it
+            for model_name, task_result in model_results.items():
+                if task_result[0] != "success":
+                    model_scores[task_id][model_name] = 0.0
+                else:
+                    centroids = self.outputs[task_id]["centroids"]
+                    clusters = self.outputs[task_id]["clusters"]
+
+                    battled_clusters = 0
+                    for controid in centroids:
+                        if task_result[1] > controid:
+                            break
+                        battled_clusters += 1
+                    battled_models = sum([len(cluster) for cluster in clusters[:battled_clusters]])
+                    model_scores[task_id][model_name] = battled_models / len(model_results) * 100
+        
+        # save the results to excel
+        df = pd.DataFrame.from_dict(model_scores, orient="index")
+        df = df.transpose()
+        df.to_excel(os.path.join(output_dir, "model_scores.xlsx"))
 
 
 if __name__ == "__main__":
@@ -113,10 +143,9 @@ if __name__ == "__main__":
     output_dir = args.output_dir
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    select_tasks_path = f"./selected_{args.dataset}_tasks.txt"
 
     all_model_results = AllModelResults(data_dir)
     all_model_results.clustering(k, 777)
     all_model_results.cal_cv()
     all_model_results.save_results_to_excel(output_dir)
-    all_model_results.ranking_all_models_by_perf(select_tasks_path, output_dir)
+    all_model_results.ranking_all_models_by_perf(output_dir)
