@@ -107,9 +107,11 @@ def unsafe_execute(
     time_limits,
     atol,
     fast_check,
+    perf,
     stat: Value,
     details: Array,
     progress: Value,
+    time_cost: Value,
 ):
     with create_tempdir():
         # These system calls are needed when cleaning up tempdir.
@@ -128,50 +130,58 @@ def unsafe_execute(
             with swallow_io():
                 exec(code, exec_globals)
                 fn = exec_globals[entry_point]
-                for i, inp in enumerate(inputs):
-                    try:
-                        with time_limit(time_limits[i]):
-                            out = fn(*inp)
+                if perf:
+                    st = time.time()
+                    for inp in inputs:
+                        fn(*inp)
+                    time_cost.value = time.time() - st
+                else:
+                    for i, inp in enumerate(inputs):
+                        try:
+                            with time_limit(time_limits[i]):
+                                out = fn(*inp)
 
-                        exp = expected[i]
-                        exact_match = out == exp
+                            exp = expected[i]
+                            exact_match = out == exp
 
-                        # ================================================ #
-                        # ============== special oracles ================= #
-                        if dataset == "mbpp":
-                            if (
-                                "are_equivalent" == entry_point
-                            ):  # Mbpp/164 special oracle
-                                exact_match = exact_match or True
-                            elif "sum_div" == entry_point:  # Mbpp/295 special oracle
-                                exact_match = exact_match or out == 0
-                            elif entry_point in MBPP_OUTPUT_NOT_NONE_TASKS:
-                                # exp is True  if not None
-                                #        False if None
-                                exact_match = exp == (out is not None)
+                            # ================================================ #
+                            # ============== special oracles ================= #
+                            if dataset == "mbpp":
+                                if (
+                                    "are_equivalent" == entry_point
+                                ):  # Mbpp/164 special oracle
+                                    exact_match = exact_match or True
+                                elif (
+                                    "sum_div" == entry_point
+                                ):  # Mbpp/295 special oracle
+                                    exact_match = exact_match or out == 0
+                                elif entry_point in MBPP_OUTPUT_NOT_NONE_TASKS:
+                                    # exp is True  if not None
+                                    #        False if None
+                                    exact_match = exp == (out is not None)
 
-                        if dataset == "humaneval":
-                            if "find_zero" == entry_point:
-                                assert _poly(*out, inp) <= atol
-                        # ============== special oracles ================= #
-                        # ================================================ #
+                            if dataset == "humaneval":
+                                if "find_zero" == entry_point:
+                                    assert _poly(*out, inp) <= atol
+                            # ============== special oracles ================= #
+                            # ================================================ #
 
-                        if atol == 0 and is_floats(exp):
-                            atol = 1e-6  # enforce atol for float comparison
-                        if not exact_match and atol != 0:
-                            np.testing.assert_allclose(out, exp, atol=atol)
-                        else:
-                            assert exact_match
-                    except BaseException:
-                        if fast_check:
-                            raise
+                            if atol == 0 and is_floats(exp):
+                                atol = 1e-6  # enforce atol for float comparison
+                            if not exact_match and atol != 0:
+                                np.testing.assert_allclose(out, exp, atol=atol)
+                            else:
+                                assert exact_match
+                        except BaseException:
+                            if fast_check:
+                                raise
 
-                        details[i] = False
+                            details[i] = False
+                            progress.value += 1
+                            continue
+
+                        details[i] = True
                         progress.value += 1
-                        continue
-
-                    details[i] = True
-                    progress.value += 1
             stat.value = _SUCCESS
         except BaseException:
             stat.value = _FAILED
@@ -192,7 +202,8 @@ def untrusted_check(
     fast_check: bool = False,
     min_time_limit: float = 0.1,
     gt_time_limit_factor: float = 2.0,
-) -> Tuple[str, np.ndarray]:
+    perf=False,
+) -> Union[Tuple[str, np.ndarray], Tuple[str, float]]:
     time_limits = [max(min_time_limit, gt_time_limit_factor * t) for t in ref_time]
     timeout = sum(time_limits) + 1
     if not fast_check:
@@ -202,6 +213,7 @@ def untrusted_check(
     progress = Value("i", 0)
     stat = Value("i", _UNKNOWN)
     details = Array("b", [False for _ in range(len(inputs))])
+    time_cost = Value("d", 0.0)
 
     p = multiprocessing.Process(
         target=unsafe_execute,
@@ -214,10 +226,12 @@ def untrusted_check(
             time_limits,
             atol,
             fast_check,
+            perf,
             # return values
             stat,
             details,
             progress,
+            time_cost,
         ),
     )
     p.start()
@@ -235,7 +249,10 @@ def untrusted_check(
     if not stat:
         stat = TIMEOUT
 
-    if stat == SUCCESS:
+    if perf:
+        return stat, time_cost.value
+
+    if stat == SUCCESS and not perf:
         if len(details) != len(inputs) or not all(details):
             stat = FAILED
 
